@@ -8,10 +8,12 @@ from pathlib import Path
 from typing import Any
 
 import yaml
+from dotenv import load_dotenv
 
 
 PACKAGE_DIR = Path(__file__).resolve().parent
 REPO_ROOT = PACKAGE_DIR.parent
+DEFAULT_ENV_FILE = REPO_ROOT / ".env"
 ALFWORLD_ASSETS_DIR = PACKAGE_DIR / "Alfworld"
 DEFAULT_ALFWORLD_CONFIG = ALFWORLD_ASSETS_DIR / "base_config.yaml"
 DEFAULT_MEMORY_CONFIG = PACKAGE_DIR / "config.yaml"
@@ -19,6 +21,18 @@ DEFAULT_EXAMPLES_PATH = ALFWORLD_ASSETS_DIR / "alfworld_examples.json"
 DEFAULT_TRAJECTORY_PATH = ALFWORLD_ASSETS_DIR / "alfworld_format_traj.json"
 DEFAULT_RESULTS_DIR = ALFWORLD_ASSETS_DIR / "results"
 DEFAULT_MEMORY_DIR = PACKAGE_DIR / "memory" / "alfworld"
+
+
+def load_environment(env_file: str | Path | None = None) -> Path:
+    """Load repository configuration without overriding process variables."""
+    configured_path = env_file or os.getenv("MEMP_ENV_FILE") or DEFAULT_ENV_FILE
+    path = Path(configured_path).expanduser().resolve()
+    load_dotenv(dotenv_path=path, override=False)
+    return path
+
+
+# Load before ALFWorld or model clients inspect environment variables.
+load_environment()
 
 
 @dataclass(frozen=True)
@@ -53,11 +67,15 @@ def configure_runtime(
     require_embedding: bool = False,
 ) -> RuntimeSettings:
     """Resolve runtime values, publish compatible aliases, and validate secrets."""
-    api_key = _first_env("OPENAI_API_KEY", "API_KEY")
+    load_environment()
+    api_key = _first_env("AGENT_API_KEY", "OPENAI_API_KEY", "API_KEY")
     api_base_url = _first_env(
-        "OPENAI_API_BASE", "OPENAI_BASE_URL", "API_BASE_URL"
+        "AGENT_API_BASE_URL",
+        "OPENAI_API_BASE",
+        "OPENAI_BASE_URL",
+        "API_BASE_URL",
     )
-    resolved_model = model_name or _first_env("MODEL_NAME")
+    resolved_model = model_name or _first_env("AGENT_MODEL_NAME", "MODEL_NAME")
 
     embedding_api_key = _first_env("EMBEDDING_MODEL_KEY") or api_key
     embedding_base_url = _first_env("EMBEDDING_MODEL_BASE_URL") or api_base_url
@@ -69,10 +87,13 @@ def configure_runtime(
 
     _set_if_value("OPENAI_API_KEY", api_key)
     _set_if_value("API_KEY", api_key)
+    _set_if_value("AGENT_API_KEY", api_key)
     _set_if_value("OPENAI_API_BASE", api_base_url)
     _set_if_value("OPENAI_BASE_URL", api_base_url)
     _set_if_value("API_BASE_URL", api_base_url)
+    _set_if_value("AGENT_API_BASE_URL", api_base_url)
     _set_if_value("MODEL_NAME", resolved_model)
+    _set_if_value("AGENT_MODEL_NAME", resolved_model)
     _set_if_value("EMBEDDING_MODEL_KEY", embedding_api_key)
     _set_if_value("EMBEDDING_MODEL_BASE_URL", embedding_base_url)
     os.environ["EMBEDDING_MODEL_NAME"] = embedding_model
@@ -80,9 +101,9 @@ def configure_runtime(
 
     missing: list[str] = []
     if require_llm and not api_key:
-        missing.append("OPENAI_API_KEY")
+        missing.append("AGENT_API_KEY or OPENAI_API_KEY")
     if require_llm and not resolved_model:
-        missing.append("MODEL_NAME or --model")
+        missing.append("AGENT_MODEL_NAME, MODEL_NAME, or --model")
     if require_embedding and not embedding_api_key:
         missing.append("EMBEDDING_MODEL_KEY (or OPENAI_API_KEY)")
     if missing:

@@ -43,6 +43,21 @@ class Memory:
                 "Missing memory build model. Set MEMORY_BUILD_MODEL_NAME, pass "
                 "build_model, or configure MODEL_NAME as a fallback."
             )
+        self.build_api_key = (
+            kwargs.get("build_api_key")
+            or os.getenv("MEMORY_BUILD_API_KEY")
+            or os.getenv("OPENAI_API_KEY")
+        )
+        if "build_api_base_url" in kwargs:
+            self.build_api_base_url = kwargs["build_api_base_url"] or None
+        elif "MEMORY_BUILD_API_BASE_URL" in os.environ:
+            self.build_api_base_url = (
+                os.getenv("MEMORY_BUILD_API_BASE_URL") or None
+            )
+        else:
+            self.build_api_base_url = (
+                os.getenv("OPENAI_API_BASE") or os.getenv("OPENAI_BASE_URL")
+            )
         self.trajectory_file = (
             os.path.abspath(self.traj_file_path) if self.traj_file_path else None
         )
@@ -301,11 +316,15 @@ class Memory:
                 generate_events_from_trajectory_prompt(query, trajectory),
                 is_string=False,
                 model=self.build_model,
+                api_key=self.build_api_key,
+                api_base_url=self.build_api_base_url,
             )
             workflow_ids = get_llm_response(
                 generate_workflow_from_events_prompt(query, events),
                 is_string=False,
                 model=self.build_model,
+                api_key=self.build_api_key,
+                api_base_url=self.build_api_base_url,
             )
             workflow = [events[wid - 1]['action'] for wid in workflow_ids]
         elif self.build_policy == "direct":
@@ -313,6 +332,8 @@ class Memory:
                 generate_workflow_from_trajectory_prompt(query, trajectory),
                 is_string=True,
                 model=self.build_model,
+                api_key=self.build_api_key,
+                api_base_url=self.build_api_base_url,
             )
         
         return workflow

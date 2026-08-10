@@ -51,9 +51,17 @@ export EMBEDDING_MODEL_KEY=YOUR_EMBEDDING_MODEL_KEY
 export EMBEDDING_MODEL_BASE_URL=YOUR_EMBEDDING_MODEL_BASE_URL
 ```
 
+Alternatively, create a repository-root `.env` from `.env.example`. The file is
+loaded automatically and is ignored by Git. Existing process environment
+variables take precedence over values in `.env`, and explicit CLI arguments
+take precedence over both.
+
 To build workflow memory with a model different from the acting model, set
-`MEMORY_BUILD_MODEL_NAME` or pass `--memory-build-model`. If omitted, memory
-construction falls back to the agent model supplied by `--model`.
+`MEMORY_BUILD_MODEL_NAME`, `MEMORY_BUILD_API_KEY`, and
+`MEMORY_BUILD_API_BASE_URL`, or pass `--memory-build-model`. Agent execution can
+independently use `AGENT_MODEL_NAME`, `AGENT_API_KEY`, and
+`AGENT_API_BASE_URL`, for example with a local OpenAI-compatible vLLM server.
+The legacy `MODEL_NAME` and `OPENAI_*` variables remain supported for the agent.
 
 For ALFWorld, use a Linux environment with Python 3.9 or 3.10. This repository
 pins `alfworld==0.4.2` to match the MemP experiment environment. Run

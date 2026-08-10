@@ -1,10 +1,4 @@
 import os
-from litellm import completion
-
-from alfworld.agents.environment import get_environment
-from concurrent.futures import ThreadPoolExecutor, as_completed
-from ProcedureMem.Alfworld.prompts import alfworld_system_prompt
-from ProcedureMem.memory import Memory
 from ProcedureMem.runtime_config import (
     DEFAULT_ALFWORLD_CONFIG,
     DEFAULT_EXAMPLES_PATH,
@@ -14,6 +8,12 @@ from ProcedureMem.runtime_config import (
     configure_runtime,
     load_alfworld_config,
 )
+from litellm import completion
+
+from alfworld.agents.environment import get_environment
+from concurrent.futures import ThreadPoolExecutor, as_completed
+from ProcedureMem.Alfworld.prompts import alfworld_system_prompt
+from ProcedureMem.memory import Memory
 import copy
 import argparse
 
@@ -237,7 +237,7 @@ def main(args):
 
 if __name__ == '__main__':
     parser = argparse.ArgumentParser()
-    parser.add_argument('--model', type=str, default='gpt-4o')
+    parser.add_argument('--model', type=str, help='Agent model; defaults to MODEL_NAME from the environment or .env')
     parser.add_argument('--split', type=str, default='dev')
     parser.add_argument('--batch_size', type=int, default=10)
     parser.add_argument('--max_steps', type=int, default=30)
@@ -249,12 +249,13 @@ if __name__ == '__main__':
     parser.add_argument('--config', default=str(DEFAULT_ALFWORLD_CONFIG), help='ALFWorld YAML config')
     args = parser.parse_args()
 
-    configure_runtime(
+    settings = configure_runtime(
         model_name=args.model,
         alfworld_data=args.alfworld_data,
         require_llm=True,
         require_embedding=args.use_memory,
     )
+    args.model = settings.model_name
 
     # env init
     config = load_alfworld_config(args.config)

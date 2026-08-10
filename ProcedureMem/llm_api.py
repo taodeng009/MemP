@@ -2,6 +2,12 @@ from openai import OpenAI
 import json
 from retry import retry
 import os
+from ProcedureMem.runtime_config import load_environment
+
+
+load_environment()
+
+_UNSET = object()
 
 TEMPERATURE = 0.2
 TOP_P = 1
@@ -15,15 +21,19 @@ def _required_env(name):
     return value
 
 
-def _get_client():
-    kwargs = {"api_key": _required_env("OPENAI_API_KEY")}
-    api_base = os.getenv("OPENAI_API_BASE") or os.getenv("OPENAI_BASE_URL")
+def _get_client(api_key=None, api_base_url=_UNSET):
+    resolved_api_key = api_key or _required_env("OPENAI_API_KEY")
+    kwargs = {"api_key": resolved_api_key}
+    if api_base_url is _UNSET:
+        api_base = os.getenv("OPENAI_API_BASE") or os.getenv("OPENAI_BASE_URL")
+    else:
+        api_base = api_base_url
     if api_base:
         kwargs["base_url"] = api_base
     return OpenAI(**kwargs)
 
-def get_response(messages, model=None):
-    client = _get_client()
+def get_response(messages, model=None, api_key=None, api_base_url=_UNSET):
+    client = _get_client(api_key=api_key, api_base_url=api_base_url)
     response = client.chat.completions.create(
         model=model or _required_env("MODEL_NAME"),
         messages=messages,
@@ -36,8 +46,19 @@ def get_response(messages, model=None):
     return response.error.message
 
 @retry(tries=5, delay=5, backoff=2, jitter=(1, 3))
-def get_llm_response(messages, is_string=False, model=None):
-    ans = get_response(messages, model=model)
+def get_llm_response(
+    messages,
+    is_string=False,
+    model=None,
+    api_key=None,
+    api_base_url=_UNSET,
+):
+    ans = get_response(
+        messages,
+        model=model,
+        api_key=api_key,
+        api_base_url=api_base_url,
+    )
     if is_string:
         return ans
     else:
