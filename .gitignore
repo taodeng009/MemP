@@ -1,0 +1,5 @@
+__pycache__/
+*.py[cod]
+.env
+ProcedureMem/Alfworld/results/
+ProcedureMem/memory/

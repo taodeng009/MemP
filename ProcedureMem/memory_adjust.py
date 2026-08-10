@@ -1,7 +1,6 @@
 import json
 import os
 from litellm import completion
-import openai
 
 prompt = """
 You are a helpful assistant.
@@ -34,22 +33,25 @@ Keep your output in the format below:
 """
 
 
-def llm(prompt,stop=None, model="YOUR_MODEL_NAME"):
+def llm(prompt,stop=None, model=None):
     if isinstance(prompt, list):
         messages = prompt
     elif isinstance(prompt, str):
         messages = [{"role": "user", "content": prompt}]
     else:
         raise ValueError(f'prompt must be a list or a string, but got {type(prompt)}')
-    response = completion(
-        model=model, 
-        messages=messages,
-        api_key=os.environ["OPENAI_API_KEY"],
-        base_url=os.environ['OPENAI_API_BASE'],
-        num_retries=10,
-        temperature=1,
-        stop=stop
-    )
+    request_kwargs = {
+        "model": model or os.environ["MODEL_NAME"],
+        "messages": messages,
+        "api_key": os.environ["OPENAI_API_KEY"],
+        "num_retries": 10,
+        "temperature": 1,
+        "stop": stop,
+    }
+    api_base = os.getenv("OPENAI_API_BASE")
+    if api_base:
+        request_kwargs["base_url"] = api_base
+    response = completion(**request_kwargs)
     if response.choices[0].message.content is not None:
         return response.choices[0].message.content
     return "Output Error"
@@ -63,9 +65,9 @@ def adjust_memory(worfklow, reward, trajectory):
 
 
 if __name__ == "__main__":
-    os.environ["OPENAI_API_KEY"] = "YOUR_API_KEY"
-    os.environ['OPENAI_API_BASE'] = "YOUR_API_BASE"
-    openai.api_key = os.environ["OPENAI_API_KEY"]
+    from ProcedureMem.runtime_config import configure_runtime
+
+    configure_runtime(require_llm=True)
     workflow = "You are a helpful assistant. You need to help the user to find the answer to the question."
     reward = 1
     trajectory = "The user asked me to find the answer to the question. I found the answer and told the user."

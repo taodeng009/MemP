@@ -10,10 +10,13 @@ from langchain_core.documents import Document
 from concurrent.futures import ThreadPoolExecutor, as_completed
 
 from ProcedureMem.llm_api import get_llm_response, get_embedding_model
-from ProcedureMem.prompt_generator import (
+from ProcedureMem.Alfworld.memory_prompts import (
     generate_workflow_from_trajectory_prompt,
     generate_events_from_trajectory_prompt,
-    generate_workflow_from_events_prompt
+    generate_workflow_from_events_prompt,
+    build_prompt_manifest,
+    get_prompt_spec,
+    prompt_manifest_mismatches,
 )
 from ProcedureMem.memory_utils import (
     compute_facts_embeddings,
@@ -30,6 +33,13 @@ class Memory:
         self.traj_file_path = kwargs.get("traj_file_path", None)
         self.retrieve_num = kwargs.get("retrieve_num", 10)
         self.memory_dir = kwargs.get("memory_dir", "memory")
+        self.prompt_domain = kwargs.get("prompt_domain", "alfworld")
+
+        if self.prompt_domain != "alfworld":
+            raise ValueError(
+                f"Unsupported prompt domain: {self.prompt_domain}. "
+                "This ALFWorld entry point requires prompt_domain='alfworld'."
+            )
 
         self.memory_size = kwargs.get("memory_size", 1000)
         self.build_policy = self.policy.get("build")
@@ -43,6 +53,8 @@ class Memory:
         self.cache_dir = self.memory_dir + "/vector_cache"
         self.facts_cache_path =  self.cache_dir + "/facts_embedding_cache.pkl"
         self.documents_path = self.memory_dir + "/" + self.build_policy + "/documents.json"
+        self.manifest_path = self.memory_dir + "/" + self.build_policy + "/manifest.json"
+        self.prompt_spec = get_prompt_spec(self.build_policy)
         self.documents = []
 
 
@@ -67,10 +79,17 @@ class Memory:
         """
         Save all current documents to disk.
         """
-        with open(self.documents_path, "w") as f:
+        with open(self.documents_path, "w", encoding="utf-8") as f:
             json.dump(
                 [{"page_content": d.page_content, "metadata": d.metadata} for d in self.documents],
-                f, indent=2
+                f, indent=2, ensure_ascii=False
+            )
+        with open(self.manifest_path, "w", encoding="utf-8") as f:
+            json.dump(
+                build_prompt_manifest(self.build_policy),
+                f,
+                indent=2,
+                ensure_ascii=False,
             )
 
         self.store = LocalFileStore(self.cache_dir)
@@ -104,8 +123,13 @@ class Memory:
         trajectory = d.get("trajectory")
         facts = d.get("facts", {})
 
-        # Check if this query + build_policy already exists
-        if any(doc.metadata.get("query") == query and doc.metadata.get("build_policy") == self.build_policy for doc in self.documents):
+        # A query built with a different prompt is not the same memory item.
+        if any(
+            doc.metadata.get("query") == query
+            and doc.metadata.get("build_policy") == self.build_policy
+            and doc.metadata.get("prompt_sha256") == self.prompt_spec.sha256
+            for doc in self.documents
+        ):
             print(f"[INFO] Query '{query}' with build policy '{self.build_policy}' already exists. Skipping...")
             return None
 
@@ -122,6 +146,9 @@ class Memory:
                 "workflow": workflow,
                 "facts": facts,
                 "build_policy": self.build_policy,
+                "prompt_domain": self.prompt_spec.domain,
+                "prompt_version": self.prompt_spec.version,
+                "prompt_sha256": self.prompt_spec.sha256,
                 "hit": 0,
                 "success": 0,
             }
@@ -146,14 +173,16 @@ class Memory:
         """
 
         if os.path.exists(self.documents_path):
-            with open(self.documents_path, "r") as f:
+            self._validate_prompt_manifest()
+            with open(self.documents_path, "r", encoding="utf-8") as f:
                 docs_data = json.load(f)
                 self.documents = [Document(**d) for d in docs_data]
+            self._validate_document_prompt_metadata()
             print(f"[INFO] Loaded {len(self.documents)} documents from {self.documents_path}")
 
 
 
-        with open(self.traj_file_path, "r") as f:
+        with open(self.traj_file_path, "r", encoding="utf-8") as f:
             traj_data = json.load(f)
         if len(traj_data) > self.memory_size:
             traj_data = traj_data[:self.memory_size]
@@ -175,41 +204,45 @@ class Memory:
 
         print(f"[INFO] {len(new_documents)} new documents added.")
 
+    def _validate_prompt_manifest(self):
+        """Refuse to mix documents produced by a different or unknown prompt."""
+        if not os.path.exists(self.manifest_path):
+            raise RuntimeError(
+                f"Memory cache {self.documents_path} has no prompt manifest. It may "
+                "have been built with the legacy TravelPlanner prompt. Archive it or "
+                "choose a new memory_dir before building ALFWorld memory."
+            )
 
-        # for d in tqdm(traj_data, desc="Building memory from trajectory"):
-        #     source = d.get("source")
-        #     query = d.get("query")
-        #     trajectory = d.get("trajectory")
-        #     facts = d.get("facts", {})
-        #     # Check if this query + build_policy already exists
-        #     if any(doc.metadata.get("query") == query and doc.metadata.get("build_policy") == self.build_policy for doc in self.documents):
-        #         print(f"[INFO] Query '{query}' with build policy '{self.build_policy}' already exists. Skipping...")
-        #         continue
+        with open(self.manifest_path, "r", encoding="utf-8") as f:
+            manifest = json.load(f)
+        cached_prompt = manifest.get("prompt", {})
+        expected_prompt = self.prompt_spec.as_dict()
+        mismatches = prompt_manifest_mismatches(manifest, self.prompt_spec)
+        if mismatches:
+            details = ", ".join(
+                f"{key}={cached_prompt.get(key)!r} (expected {expected_prompt.get(key)!r})"
+                for key in mismatches
+            )
+            raise RuntimeError(
+                f"Memory cache prompt mismatch in {self.manifest_path}: {details}. "
+                "Archive the old cache or choose a new memory_dir; do not mix memories "
+                "built from different prompts."
+            )
 
-        #     # build workflow
-        #     workflow = self.build(query, trajectory)
-            
-        #     # Create Document
-        #     content = json.dumps({"query": query, "workflow": workflow, "facts": facts})
-        #     doc = Document(
-        #         page_content=content,
-        #         metadata={
-        #             "source": source,
-        #             "query": query,
-        #             "workflow": workflow,
-        #             "facts": facts,
-        #             "build_policy": self.build_policy,
-        #         }
-        #     )
-        #     # Append to documents list
-        #     self.documents.append(doc)
-        #     #save to disk
-        #     with open(self.documents_path, "w") as f:
-        #         json.dump(
-        #             [{"page_content": d.page_content, "metadata": d.metadata} for d in self.documents],
-        #             f, indent=2
-        #         )
-        #     print(f"[INFO] New document added for query='{query}'")
+    def _validate_document_prompt_metadata(self):
+        incompatible = [
+            index
+            for index, doc in enumerate(self.documents)
+            if doc.metadata.get("prompt_domain") != self.prompt_spec.domain
+            or doc.metadata.get("prompt_version") != self.prompt_spec.version
+            or doc.metadata.get("prompt_sha256") != self.prompt_spec.sha256
+        ]
+        if incompatible:
+            preview = ", ".join(str(index) for index in incompatible[:10])
+            raise RuntimeError(
+                f"Memory documents contain incompatible prompt metadata at indexes "
+                f"{preview}. Archive {self.documents_path} or choose a new memory_dir."
+            )
 
     def build(self, query, trajectory):
         """

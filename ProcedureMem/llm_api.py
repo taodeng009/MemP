@@ -1,23 +1,31 @@
-import time
 from openai import OpenAI
 import json
 from retry import retry
 import os
 
-API_KEY = os.getenv("API_KEY")
-API_BASE = os.getenv("API_BASE_URL")
-EMBEDDING_MODEL_KEY = os.getenv("EMBEDDING_MODEL_KEY")
-EMBEDDING_MODEL_BASE_URL = os.getenv("EMBEDDING_MODEL_BASE_URL")
-MODEL_NAME = os.getenv("MODEL_NAME")
 TEMPERATURE = 0.2
 TOP_P = 1
 MAX_TOKENS = 4096
 
-client = OpenAI(api_key=API_KEY, base_url=API_BASE)
+
+def _required_env(name):
+    value = os.getenv(name)
+    if not value:
+        raise RuntimeError(f"Missing required environment variable: {name}")
+    return value
+
+
+def _get_client():
+    kwargs = {"api_key": _required_env("OPENAI_API_KEY")}
+    api_base = os.getenv("OPENAI_API_BASE") or os.getenv("OPENAI_BASE_URL")
+    if api_base:
+        kwargs["base_url"] = api_base
+    return OpenAI(**kwargs)
 
 def get_response(messages):
+    client = _get_client()
     response = client.chat.completions.create(
-        model=MODEL_NAME,
+        model=_required_env("MODEL_NAME"),
         messages=messages,
         temperature=TEMPERATURE,
         top_p=TOP_P,
@@ -40,10 +48,16 @@ def get_llm_response(messages, is_string=False):
 from langchain_openai import OpenAIEmbeddings
 
 def get_embedding_model():
+    api_key = os.getenv("EMBEDDING_MODEL_KEY") or os.getenv("OPENAI_API_KEY")
+    if not api_key:
+        raise RuntimeError(
+            "Missing EMBEDDING_MODEL_KEY (or OPENAI_API_KEY fallback)"
+        )
+    api_base = os.getenv("EMBEDDING_MODEL_BASE_URL") or os.getenv("OPENAI_API_BASE")
     embedding = OpenAIEmbeddings(
-        model="text-embedding-3-small",
-        openai_api_key=EMBEDDING_MODEL_KEY,
-        openai_api_base=EMBEDDING_MODEL_BASE_URL,
+        model=os.getenv("EMBEDDING_MODEL_NAME", "text-embedding-3-small"),
+        openai_api_key=api_key,
+        openai_api_base=api_base,
         max_retries=10
     )
     return embedding

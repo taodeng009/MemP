@@ -37,7 +37,7 @@ In MemP, we support two strategies for building procedural memory: one construct
 
 ```bash
 git clone https://github.com/zjunlp/MemP
-cd ProceduralMem
+cd MemP
 pip install -r requirements.txt
 
 ```
@@ -51,9 +51,21 @@ export EMBEDDING_MODEL_KEY=YOUR_EMBEDDING_MODEL_KEY
 export EMBEDDING_MODEL_BASE_URL=YOUR_EMBEDDING_MODEL_BASE_URL
 ```
 
+For ALFWorld, use a Linux environment with Python 3.9 or 3.10. This repository
+pins `alfworld==0.4.2` to match the MemP experiment environment. Run
+`alfworld-download`, and validate both evaluation splits before calling an LLM:
+
+```bash
+export ALFWORLD_DATA=/path/to/alfworld-data
+python -m ProcedureMem.check_alfworld_setup --init-env --split dev
+python -m ProcedureMem.check_alfworld_setup --init-env --split test
+```
+
+See `docs/alfworld_stage1_server_setup.md` for the complete server checklist.
+
 ## ✏️Offline Running
 ```bash
-python run_memp_offline.py \
+python -m ProcedureMem.run_memp_offline \
     --model your_model_name \
     --split dev_or_test \
     --batch_size concurrency_num \
@@ -67,7 +79,7 @@ python run_memp_offline.py \
 
 ## 📝Online Running
 ```bash
-python run_memp_online.py \
+python -m ProcedureMem.run_memp_online \
     --model your_model_name \
     --split dev_or_test \
     --batch_size concurrency_num \

@@ -1,4 +1,7 @@
-## This file contains prompt templates for generating memory and events from trajectories.
+"""Legacy TravelPlanner prompt templates.
+
+ALFWorld memory construction uses ProcedureMem.Alfworld.memory_prompts instead.
+"""
 def generate_workflow_from_trajectory_prompt(query, trajectory):
     template = "You are a helpful assistant."
     prompt = f'''

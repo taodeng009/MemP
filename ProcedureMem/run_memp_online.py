@@ -1,57 +1,49 @@
 import os
-import openai
 from litellm import completion
 
-import yaml
-import alfworld
-import alfworld.agents.environment
 from alfworld.agents.environment import get_environment
 from concurrent.futures import ThreadPoolExecutor, as_completed
-import inspect
-import sys
-from Alfworld.prompts import alfworld_system_prompt
+from ProcedureMem.Alfworld.prompts import alfworld_system_prompt
 from ProcedureMem.memory import Memory
+from ProcedureMem.runtime_config import (
+    DEFAULT_ALFWORLD_CONFIG,
+    DEFAULT_EXAMPLES_PATH,
+    DEFAULT_MEMORY_CONFIG,
+    DEFAULT_RESULTS_DIR,
+    configure_runtime,
+    load_alfworld_config,
+    load_memory_config,
+)
 import copy
 import argparse
-os.environ["OPENAI_API_KEY"] = "YOUR_API_KEY"
-os.environ['OPENAI_API_BASE'] = "YOUR_API_BASE"
-openai.api_key = os.environ["OPENAI_API_KEY"]
-os.environ["ALFWORLD_DATA"] = "../alfworld/datasets"
 
 
 
 
 
 
-def llm(prompt,stop=None, model="YOUR_MODEL_NAME"):
+def llm(prompt,stop=None, model=None):
     if isinstance(prompt, list):
         messages = prompt
     elif isinstance(prompt, str):
         messages = [{"role": "user", "content": prompt}]
     else:
         raise ValueError(f'prompt must be a list or a string, but got {type(prompt)}')
-    response = completion(
-        model=model, 
-        messages=messages,
-        api_key=os.environ["OPENAI_API_KEY"],
-        base_url=os.environ['OPENAI_API_BASE'],
-        num_retries=10,
-        temperature=1,
-        stop=stop
-    )
+    request_kwargs = {
+        "model": model or os.environ["MODEL_NAME"],
+        "messages": messages,
+        "api_key": os.environ["OPENAI_API_KEY"],
+        "num_retries": 10,
+        "temperature": 1,
+        "stop": stop,
+    }
+    api_base = os.getenv("OPENAI_API_BASE")
+    if api_base:
+        request_kwargs["base_url"] = api_base
+    response = completion(**request_kwargs)
     if response.choices[0].message.content is not None:
         return response.choices[0].message.content
     return "Output Error"
-
-
-
-# os.environ["ALFWORLD_DATA"] = "../alfworld/datasets"
-
-
-
-
-# import time
-# time.sleep(20)
 
 
 
@@ -153,14 +145,7 @@ def alfworld_run_batch(obs:list=[],names:list=[],few_shot=True,max_steps=30,exam
 
 def main(args):
     model_name = args.model
-    with open('Alfworld/base_config.yaml') as reader:
-        config = yaml.safe_load(reader)
-    if args.split == 'dev':
-        split = "eval_in_distribution"
-    else:
-        split = "eval_out_of_distribution"
-
-    output_path = f'Alfworld/results/{model_name}/{args.split}_{args.exp_name}_few_shot_{args.few_shot}_memory_{args.use_memory}'
+    output_path = DEFAULT_RESULTS_DIR / model_name / f'{args.split}_{args.exp_name}_few_shot_{args.few_shot}_memory_{args.use_memory}'
 
 
     if not os.path.exists(output_path):
@@ -168,17 +153,14 @@ def main(args):
 
     #  memory init
     if args.use_memory:
-        Memory_config = yaml.safe_load(open('ProcedureMem/config.yaml'))
-        Memory_config["memory_dir"] = f"{Memory_config['memory_dir']}_{args.exp_name}"
-        Pro_Mem = Memory(**Memory_config)
+        memory_config = load_memory_config(args.memory_config)
+        memory_config["memory_dir"] = f"{memory_config['memory_dir']}_{args.exp_name}"
+        Pro_Mem = Memory(**memory_config)
 
     # env init
 
     import json
-    folder = './Alfworld'
-    prompt_file = 'alfworld_examples.json'
-
-    with open(folder + prompt_file, 'r') as f:
+    with DEFAULT_EXAMPLES_PATH.open('r', encoding='utf-8') as f:
         examples_list = json.load(f)
 
 
@@ -192,7 +174,7 @@ def main(args):
     for file in os.listdir(output_path):
         if file.endswith('.json'):
             finished_games += 1
-            with open(f'{output_path}/{file}', 'r') as f:
+            with open(output_path / file, 'r', encoding='utf-8') as f:
                 result = json.load(f)
                 all_reward += result['reward']
 
@@ -239,7 +221,7 @@ def main(args):
         
 
         for i, result in enumerate(batch_results):
-            with open(f'{output_path}/idx_{idx*env.batch_size+i}.json', 'w') as f:
+            with open(output_path / f'idx_{idx*env.batch_size+i}.json', 'w', encoding='utf-8') as f:
                 json.dump(result, f, indent=4, ensure_ascii=False)
 
         print(f'Finished {idx*env.batch_size+i+1} games')
@@ -264,15 +246,25 @@ if __name__ == '__main__':
     parser.add_argument('--few_shot', action='store_true')
     parser.add_argument('--use_memory', action='store_true')
     parser.add_argument('--overwrite', action='store_true')
+    parser.add_argument('--alfworld-data', help='ALFWorld data root; defaults to ALFWORLD_DATA or ~/.cache/alfworld')
+    parser.add_argument('--config', default=str(DEFAULT_ALFWORLD_CONFIG), help='ALFWorld YAML config')
+    parser.add_argument('--memory-config', default=str(DEFAULT_MEMORY_CONFIG), help='Memory YAML config')
     args = parser.parse_args()
-    
-    if args.overwrite and os.path.exists(f'Alfworld/results/{args.model}/{args.split}_{args.exp_name}_few_shot_{args.few_shot}_memory_{args.use_memory}'):
-        for file in os.listdir(f'Alfworld/results/{args.model}/{args.split}_{args.exp_name}_few_shot_{args.few_shot}_memory_{args.use_memory}'):
-            os.remove(f'Alfworld/results/{args.model}/{args.split}_{args.exp_name}_few_shot_{args.few_shot}_memory_{args.use_memory}/{file}')
+
+    configure_runtime(
+        model_name=args.model,
+        alfworld_data=args.alfworld_data,
+        require_llm=True,
+        require_embedding=args.use_memory,
+    )
+
+    output_path = DEFAULT_RESULTS_DIR / args.model / f'{args.split}_{args.exp_name}_few_shot_{args.few_shot}_memory_{args.use_memory}'
+    if args.overwrite and output_path.exists():
+        for file in output_path.glob('*.json'):
+            file.unlink()
 
     # env init
-    with open('Alfworld/base_config.yaml') as reader:
-        config = yaml.safe_load(reader)
+    config = load_alfworld_config(args.config)
 
     if args.split == 'dev':
         split = "eval_in_distribution"
@@ -283,5 +275,3 @@ if __name__ == '__main__':
     num_games = len(env.gamefiles)
     print(num_games)
     main(args)
-
-
