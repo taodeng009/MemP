@@ -21,6 +21,18 @@ def _required_env(name):
     return value
 
 
+def _optional_bool_env(name):
+    value = os.getenv(name)
+    if value is None or not value.strip():
+        return None
+    normalized = value.strip().lower()
+    if normalized in {"1", "true", "yes", "on"}:
+        return True
+    if normalized in {"0", "false", "no", "off"}:
+        return False
+    raise ValueError(f"{name} must be true or false, found {value!r}")
+
+
 def _get_client(api_key=None, api_base_url=_UNSET):
     resolved_api_key = api_key or _required_env("OPENAI_API_KEY")
     kwargs = {"api_key": resolved_api_key}
@@ -34,13 +46,17 @@ def _get_client(api_key=None, api_base_url=_UNSET):
 
 def get_response(messages, model=None, api_key=None, api_base_url=_UNSET):
     client = _get_client(api_key=api_key, api_base_url=api_base_url)
-    response = client.chat.completions.create(
-        model=model or _required_env("MODEL_NAME"),
-        messages=messages,
-        temperature=TEMPERATURE,
-        top_p=TOP_P,
-        max_tokens=MAX_TOKENS
-    )
+    request = {
+        "model": model or _required_env("MODEL_NAME"),
+        "messages": messages,
+        "temperature": TEMPERATURE,
+        "top_p": TOP_P,
+        "max_tokens": MAX_TOKENS,
+    }
+    enable_thinking = _optional_bool_env("MEMORY_BUILD_ENABLE_THINKING")
+    if enable_thinking is not None:
+        request["extra_body"] = {"enable_thinking": enable_thinking}
+    response = client.chat.completions.create(**request)
     if not hasattr(response, "error"):
         return response.choices[0].message.content
     return response.error.message
@@ -79,7 +95,9 @@ def get_embedding_model():
         model=os.getenv("EMBEDDING_MODEL_NAME", "text-embedding-3-small"),
         openai_api_key=api_key,
         openai_api_base=api_base,
-        max_retries=10
+        max_retries=10,
+        # Non-OpenAI endpoints must tokenize with their own model vocabulary.
+        check_embedding_ctx_length=False,
     )
     return embedding
 

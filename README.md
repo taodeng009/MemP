@@ -61,6 +61,8 @@ To build workflow memory with a model different from the acting model, set
 `MEMORY_BUILD_API_BASE_URL`, or pass `--memory-build-model`. Agent execution can
 independently use `AGENT_MODEL_NAME`, `AGENT_API_KEY`, and
 `AGENT_API_BASE_URL`, for example with a local OpenAI-compatible vLLM server.
+Set `MEMORY_BUILD_ENABLE_THINKING=false` when using a hybrid-thinking builder
+such as `qwen3.5-plus`; leave it unset for providers that do not support it.
 The legacy `MODEL_NAME` and `OPENAI_*` variables remain supported for the agent.
 
 For ALFWorld, use a Linux environment with Python 3.9 or 3.10. This repository
