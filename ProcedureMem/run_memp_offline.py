@@ -11,10 +11,9 @@ from ProcedureMem.runtime_config import (
 from litellm import completion
 
 from alfworld.agents.environment import get_environment
-from concurrent.futures import ThreadPoolExecutor, as_completed
 from ProcedureMem.Alfworld.prompts import alfworld_system_prompt
+from ProcedureMem.alfworld_agent import run_alfworld_batch
 from ProcedureMem.memory import Memory
-import copy
 import argparse
 
 
@@ -45,103 +44,21 @@ def llm(prompt,stop=None, model=None):
     )
     if response.choices[0].message.content is not None:
         return response.choices[0].message.content
-    return "Output Error"
+    raise RuntimeError("LLM returned an empty response")
 
 
 
-def process_ob(ob):
-    if ob.startswith('You arrive at loc '):
-        ob = ob[ob.find('. ')+2:]    
-    return ob
-
-
-
-
-def get_example(name,examples_list):
-    prefixes = {
-    'pick_and_place': 'put',
-    'pick_clean_then_place': 'clean',
-    'pick_heat_then_place': 'heat',
-    'pick_cool_then_place': 'cool',
-    'look_at_obj': 'examine',
-    'pick_two_obj': 'puttwo'
-}
-    for k, v in prefixes.items():
-        if name.startswith(k):
-            for example in examples_list:
-                if example['task'] == v:
-                    return example['example']
-    assert False, f'{name} not found'
-
-
-def alfworld_run_batch(obs:list=[],names:list=[],few_shot=True,max_steps=30,examples_list=[]):
-    # Initialize messages list and active tasks
-    messages_list = []
-    active_tasks = list(range(len(obs)))  # Track active task indices
-    
-
-
-
-    for ob, name in zip(obs, names):
-        messages = []
-        messages.append({"role": "system", "content": alfworld_system_prompt})
-        if few_shot:
-            example = get_example(name,examples_list)
-            example_copy = copy.deepcopy(example)
-            example_copy[0]['content'] = "Here is an example of how to solve the task:\nExample:\n" + example_copy[0]['content']
-
-            messages.extend(example_copy)
-            messages.append({"role": "user", "content": "Now it's your turn.\n" + ob})
-        else:
-            messages.append({"role": "user", "content": ob})
-        messages_list.append(messages)
-
-    for i in range(max_steps):
-        if not active_tasks:  # If no active tasks, break the loop
-            break
-        print(f'\033[91mActive tasks: {active_tasks}\033[0m')
-
-
-        responses = {}
-        with ThreadPoolExecutor(max_workers=len(active_tasks)) as executor:
-            futures = {executor.submit(llm, messages_list[idx]): idx for idx in active_tasks}
-            for future in as_completed(futures):
-                idx = futures[future]
-                try:
-                    response = future.result()
-                    print(f'\033[92mAgent {idx}: \n{response}\033[0m')
-                    responses[idx] = response
-                except Exception as e:
-                    print(f'Error {idx}: {e}')
-                    continue
-        
-        responses = dict(sorted(responses.items(), key=lambda x: x[0]))
-        for idx, response in responses.items():
-            messages_list[idx].append({"role": "assistant", "content": response})
-        
-        # Only process actions for active tasks
-        action_list = [""] * len(obs)  # Initialize with empty actions
-        for idx in active_tasks:
-            if idx in responses:
-                if 'Action: ' in responses[idx]:
-                    action_list[idx] = responses[idx].split('Action: ')[-1].strip()
-                else:
-                    action_list[idx] = ""
-        
-        observation, reward, done, info = env.step(action_list)
-        observation = [process_ob(ob) for ob in observation]
-        print(f'\033[93mObservation: \n{observation}\033[0m')
-        reward = info['won']
-
-        # Update active tasks list
-        new_active_tasks = []
-        for idx in active_tasks:
-            messages_list[idx].append({"role": "user", "content": f'Observation: {observation[idx]}'})
-            if not done[idx]:
-                new_active_tasks.append(idx)
-        active_tasks = new_active_tasks
-    
-    return [{"messages": messages, "reward": reward, "name": name} for messages, reward, name in zip(messages_list, reward, names)]
+def alfworld_run_batch(obs=None, names=None, few_shot=True, max_steps=30, examples_list=None):
+    return run_alfworld_batch(
+        env=env,
+        observations=obs or [],
+        names=names or [],
+        llm_fn=llm,
+        system_prompt=alfworld_system_prompt,
+        few_shot=few_shot,
+        max_steps=max_steps,
+        examples=examples_list or [],
+    )
         
 
 
@@ -193,7 +110,10 @@ def main(args):
 
 
 
-    for idx in tqdm(range(math.ceil(num_games/env.batch_size))):
+    batch_count = math.ceil(num_games / env.batch_size)
+    if args.limit_batches is not None:
+        batch_count = min(batch_count, args.limit_batches)
+    for idx in tqdm(range(batch_count)):
 
         ob_list, info = env.reset()
         if idx*env.batch_size + env.batch_size <=finished_games:
@@ -240,6 +160,7 @@ if __name__ == '__main__':
     parser.add_argument('--model', type=str, help='Agent model; defaults to MODEL_NAME from the environment or .env')
     parser.add_argument('--split', type=str, default='dev')
     parser.add_argument('--batch_size', type=int, default=10)
+    parser.add_argument('--limit-batches', type=int, help='Run only the first N batches (for smoke tests)')
     parser.add_argument('--max_steps', type=int, default=30)
     parser.add_argument('--exp_name', type=str, default='')
     parser.add_argument('--few_shot', action='store_true')
@@ -248,6 +169,8 @@ if __name__ == '__main__':
     parser.add_argument('--alfworld-data', help='ALFWorld data root; defaults to ALFWORLD_DATA or ~/.cache/alfworld')
     parser.add_argument('--config', default=str(DEFAULT_ALFWORLD_CONFIG), help='ALFWorld YAML config')
     args = parser.parse_args()
+    if args.limit_batches is not None and args.limit_batches < 1:
+        parser.error('--limit-batches must be at least 1')
 
     settings = configure_runtime(
         model_name=args.model,
