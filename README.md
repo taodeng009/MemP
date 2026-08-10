@@ -75,6 +75,52 @@ python -m ProcedureMem.check_alfworld_setup --init-env --split test
 
 See `docs/alfworld_stage1_server_setup.md` for the complete server checklist.
 
+## ALFWorld Paired Evaluation
+
+Use the unified entry point for a controlled `no_memory` versus `memory`
+comparison. First freeze a deterministic `valid_unseen` task manifest:
+
+```bash
+python -m ProcedureMem.eval_alfworld \
+    --condition no_memory \
+    --split valid_unseen \
+    --seed 42 \
+    --limit-tasks 20 \
+    --task-manifest ProcedureMem/Alfworld/manifests/valid_unseen_pilot20.json \
+    --create-manifest-only
+```
+
+Run both conditions with the same manifest and inference settings:
+
+```bash
+python -m ProcedureMem.eval_alfworld \
+    --condition no_memory \
+    --split valid_unseen \
+    --seed 42 \
+    --task-manifest ProcedureMem/Alfworld/manifests/valid_unseen_pilot20.json \
+    --batch-size 1 \
+    --max-steps 30 \
+    --temperature 1.0 \
+    --top-k 3 \
+    --experiment-name valid_unseen_pilot20
+
+python -m ProcedureMem.eval_alfworld \
+    --condition memory \
+    --split valid_unseen \
+    --seed 42 \
+    --task-manifest ProcedureMem/Alfworld/manifests/valid_unseen_pilot20.json \
+    --batch-size 1 \
+    --max-steps 30 \
+    --temperature 1.0 \
+    --top-k 3 \
+    --experiment-name valid_unseen_pilot20
+```
+
+Per-task JSON, `results.jsonl`, and `summary.json/csv` are written below
+`ProcedureMem/Alfworld/results/paired/<experiment-name>/<condition>/`. Once
+both conditions exist, the entry point also writes `comparison.json/csv` and
+refuses to compare mismatched task IDs or inference settings.
+
 ## ✏️Offline Running
 ```bash
 python -m ProcedureMem.run_memp_offline \
