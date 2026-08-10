@@ -121,6 +121,15 @@ Per-task JSON, `results.jsonl`, and `summary.json/csv` are written below
 both conditions exist, the entry point also writes `comparison.json/csv` and
 refuses to compare mismatched task IDs or inference settings.
 
+To run the complete paired evaluation from a reusable script:
+
+```bash
+bash scripts/run_alfworld_paired.sh
+```
+
+Edit the settings at the top of the script to change the split, task count,
+seed, batch size, maximum steps, temperature, or retrieval top-k.
+
 ## ✏️Offline Running
 ```bash
 python -m ProcedureMem.run_memp_offline \
