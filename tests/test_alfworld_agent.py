@@ -156,12 +156,41 @@ class AlfworldBatchRunnerTests(unittest.TestCase):
             llm_fn=lambda _: "Thought: uncertain",
             system_prompt="system",
             few_shot=False,
+            max_steps=3,
         )
 
         self.assertEqual(env.actions, [])
-        self.assertEqual(results[0]["termination_reason"], "parse_error")
+        self.assertEqual(results[0]["termination_reason"], "max_steps")
         self.assertEqual(results[0]["steps"], 0)
+        self.assertEqual(results[0]["turns"], 3)
+        self.assertEqual(results[0]["parse_errors"], 3)
         self.assertFalse(results[0]["reward"])
+
+    def test_premature_completion_is_reprompted_until_an_action_succeeds(self):
+        env = ImmediateSuccessEnv()
+        responses = iter(
+            (
+                "Thought: finished\nAction: task completed",
+                "Thought: continue\nAction: go to table 1",
+            )
+        )
+        results = run_alfworld_batch(
+            env=env,
+            observations=["task"],
+            names=["task"],
+            llm_fn=lambda _: next(responses),
+            system_prompt="system",
+            few_shot=False,
+            max_steps=3,
+        )
+
+        self.assertEqual(env.actions, [["go to table 1"]])
+        self.assertEqual(results[0]["termination_reason"], "success")
+        self.assertEqual(results[0]["steps"], 1)
+        self.assertEqual(results[0]["turns"], 2)
+        self.assertEqual(results[0]["parse_errors"], 1)
+        self.assertIsNone(results[0]["error"])
+        self.assertIn("environment has not ended", results[0]["messages"][-3]["content"])
 
     def test_active_task_ends_at_max_steps(self):
         class NeverDoneEnv:
@@ -180,6 +209,7 @@ class AlfworldBatchRunnerTests(unittest.TestCase):
 
         self.assertEqual(results[0]["termination_reason"], "max_steps")
         self.assertEqual(results[0]["steps"], 2)
+        self.assertEqual(results[0]["turns"], 2)
 
     def test_environment_failure_is_recorded_for_each_stepped_task(self):
         class BrokenEnv:

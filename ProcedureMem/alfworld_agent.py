@@ -25,6 +25,11 @@ ACTION_PATTERNS = (
 )
 ACTION_LABEL = re.compile(r"\baction\s*:\s*([^\r\n]+)", re.IGNORECASE)
 INACTIVE_ACTION = "look"
+ACTION_RETRY_MESSAGE = (
+    "Observation: The environment has not ended the task. Your previous response did "
+    "not contain a supported action. Continue the task and output exactly one valid "
+    "action using the required 'Thought: ...\\nAction: ...' format."
+)
 
 
 class ActionParseError(ValueError):
@@ -133,6 +138,8 @@ class TaskState:
     active: bool = True
     reward: bool = False
     steps: int = 0
+    turns: int = 0
+    parse_errors: int = 0
     termination_reason: str | None = None
     error: str | None = None
     actions: list[str] = field(default_factory=list)
@@ -148,6 +155,8 @@ class TaskState:
             "reward": self.reward,
             "name": self.name,
             "steps": self.steps,
+            "turns": self.turns,
+            "parse_errors": self.parse_errors,
             "termination_reason": self.termination_reason,
             "error": self.error,
             "actions": self.actions,
@@ -191,6 +200,8 @@ def run_alfworld_batch(
         active_indices = [index for index, state in enumerate(states) if state.active]
         if not active_indices:
             break
+        for index in active_indices:
+            states[index].turns += 1
 
         responses: dict[int, str] = {}
         with ThreadPoolExecutor(max_workers=len(active_indices)) as executor:
@@ -218,7 +229,10 @@ def run_alfworld_batch(
             try:
                 actions[index] = parse_action(response)
             except ActionParseError as exc:
-                states[index].finish("parse_error", error=str(exc))
+                state = states[index]
+                state.parse_errors += 1
+                state.error = str(exc)
+                state.messages.append({"role": "user", "content": ACTION_RETRY_MESSAGE})
 
         if not actions:
             continue
@@ -251,5 +265,5 @@ def run_alfworld_batch(
 
     for state in states:
         if state.active:
-            state.finish("max_steps")
+            state.finish("max_steps", error=state.error)
     return [state.as_result() for state in states]
