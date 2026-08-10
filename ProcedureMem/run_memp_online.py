@@ -112,10 +112,10 @@ def main(args):
         new_ob_list = []
         workflow_list = []
         memory_list = []
-        for ob in ob_list:
-            query = ob.split("\nYour task is to: ")[-1]
-            print(query)
-            if args.use_memory and len(Pro_Mem.documents) > 0:
+        if args.use_memory and len(Pro_Mem.documents) > 0:
+            for ob in ob_list:
+                query = ob.split("\nYour task is to: ")[-1]
+                print(query)
                 workflow = Pro_Mem.retrieve(query)
                 workflow = [{"task_name": w[0].metadata.get("query"), "guidelines": w[0].metadata.get('workflow')} for w in workflow]
                 memory_list.append(workflow[0]["task_name"])
@@ -125,10 +125,7 @@ def main(args):
 
                 ob = ob + f'Here are some guidelines of how to solve the similar task:\n{workflow}\n'
                 new_ob_list.append(ob)
-                ob_list = new_ob_list
-
-
-        print(ob)
+            ob_list = new_ob_list
         name_list = ['/'.join(info['extra.gamefile'][i].split('/')[-3:-1]) for i in range(len(ob_list))]
         # get_prompt_list
         batch_results = alfworld_run_batch(obs=ob_list,names=name_list, few_shot=args.few_shot, max_steps=args.max_steps,examples_list=examples_list)
@@ -148,7 +145,7 @@ def main(args):
         print(f'Finished {idx*env.batch_size+i+1} games')
 
 
-        if Pro_Mem.is_cold_start == False:
+        if args.use_memory and Pro_Mem.is_cold_start == False:
             trajectory_list = [result['messages'] for result in batch_results]
             reward_list = [result['reward'] for result in batch_results]
             Pro_Mem.update(query_list, trajectory_list, reward_list, workflow_list, memory_list)

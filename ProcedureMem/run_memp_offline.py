@@ -132,9 +132,6 @@ def main(args):
                 ob = ob + f'Here are some guidelines of how to solve the similar task:\n{workflow}\n'
                 new_ob_list.append(ob)
             ob_list = new_ob_list
-
-
-        print(ob)
         name_list = ['/'.join(info['extra.gamefile'][i].split('/')[-3:-1]) for i in range(len(ob_list))]
         # get_prompt_list
         batch_results = alfworld_run_batch(obs=ob_list,names=name_list, few_shot=args.few_shot, max_steps=args.max_steps,examples_list=examples_list)
