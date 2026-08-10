@@ -12,7 +12,7 @@ from litellm import completion
 
 from alfworld.agents.environment import get_environment
 from ProcedureMem.Alfworld.prompts import alfworld_system_prompt
-from ProcedureMem.alfworld_agent import run_alfworld_batch
+from ProcedureMem.alfworld_agent import resolve_litellm_model, run_alfworld_batch
 from ProcedureMem.memory import Memory
 import argparse
 
@@ -28,17 +28,18 @@ def llm(prompt,stop=None, model=None):
         messages = [{"role": "user", "content": prompt}]
     else:
         raise ValueError(f'prompt must be a list or a string, but got {type(prompt)}')
+    api_base = os.getenv("OPENAI_API_BASE")
+    model_name = resolve_litellm_model(model or os.environ["MODEL_NAME"], api_base)
     request_kwargs = {
-        "model": model or os.environ["MODEL_NAME"],
+        "model": model_name,
         "messages": messages,
         "api_key": os.environ["OPENAI_API_KEY"],
         "num_retries": 10,
         "temperature": 1,
         "stop": stop,
     }
-    api_base = os.getenv("OPENAI_API_BASE")
     if api_base:
-        request_kwargs["base_url"] = api_base
+        request_kwargs["api_base"] = api_base
     response = completion(**request_kwargs)
     if response.choices[0].message.content is not None:
         return response.choices[0].message.content

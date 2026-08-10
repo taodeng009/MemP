@@ -6,6 +6,7 @@ from ProcedureMem.Alfworld.prompts import alfworld_system_prompt
 from ProcedureMem.alfworld_agent import (
     ActionParseError,
     parse_action,
+    resolve_litellm_model,
     run_alfworld_batch,
 )
 
@@ -44,6 +45,17 @@ class ImmediateSuccessEnv:
 
 
 class AlfworldActionParserTests(unittest.TestCase):
+    def test_openai_compatible_endpoint_gets_litellm_provider_prefix(self):
+        self.assertEqual(
+            resolve_litellm_model("Qwen/Qwen3-4B", "http://localhost:8000/v1"),
+            "openai/Qwen/Qwen3-4B",
+        )
+        self.assertEqual(
+            resolve_litellm_model("openai/Qwen/Qwen3-4B", "http://localhost:8000/v1"),
+            "openai/Qwen/Qwen3-4B",
+        )
+        self.assertEqual(resolve_litellm_model("gpt-4o", None), "gpt-4o")
+
     def test_parses_common_format_variations(self):
         cases = {
             "Thought: inspect\naction:   GO   TO fridge 1": "go to fridge 1",

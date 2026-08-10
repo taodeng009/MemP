@@ -31,6 +31,13 @@ class ActionParseError(ValueError):
     """Raised when a model response contains no supported ALFWorld action."""
 
 
+def resolve_litellm_model(model: str, api_base: str | None) -> str:
+    """Route custom OpenAI-compatible endpoints through LiteLLM's provider."""
+    if api_base and not model.startswith("openai/"):
+        return f"openai/{model}"
+    return model
+
+
 def _clean_action(candidate: str) -> str:
     action = candidate.strip().strip("`*\"").strip().rstrip(".")
     action = re.sub(r"\s+", " ", action).lower()
