@@ -25,15 +25,6 @@ ACTION_PATTERNS = (
 )
 ACTION_LABEL = re.compile(r"\baction\s*:\s*([^\r\n]+)", re.IGNORECASE)
 INACTIVE_ACTION = "look"
-ACTION_RETRY_MESSAGE = (
-    "Observation: The environment has not ended the task. Your previous response did "
-    "not contain a supported action. Continue the task and output exactly one valid "
-    "action using the required 'Thought: ...\\nAction: ...' format."
-)
-
-
-class ActionParseError(ValueError):
-    """Raised when a model response contains no supported ALFWorld action."""
 
 
 def resolve_litellm_model(model: str, api_base: str | None) -> str:
@@ -61,14 +52,13 @@ def is_valid_action(action: str) -> bool:
 
 
 def parse_action(response: str) -> str:
-    """Extract the last valid, single-line action from a model response."""
+    """Extract an action while leaving validity feedback to ALFWorld."""
     if not isinstance(response, str) or not response.strip():
-        raise ActionParseError("model response is empty")
+        return ""
 
     labelled = [_clean_action(value) for value in ACTION_LABEL.findall(response)]
-    for action in reversed(labelled):
-        if is_valid_action(action):
-            return action
+    if labelled:
+        return labelled[-1]
 
     nonempty_lines = [
         _clean_action(line)
@@ -77,11 +67,7 @@ def parse_action(response: str) -> str:
     ]
     if len(nonempty_lines) == 1 and is_valid_action(nonempty_lines[0]):
         return nonempty_lines[0]
-
-    detail = "no supported action after an Action: label"
-    if labelled:
-        detail += f" (last candidate: {labelled[-1]!r})"
-    raise ActionParseError(detail)
+    return ""
 
 
 def process_observation(observation: str) -> str:
@@ -138,8 +124,6 @@ class TaskState:
     active: bool = True
     reward: bool = False
     steps: int = 0
-    turns: int = 0
-    parse_errors: int = 0
     termination_reason: str | None = None
     error: str | None = None
     actions: list[str] = field(default_factory=list)
@@ -155,8 +139,6 @@ class TaskState:
             "reward": self.reward,
             "name": self.name,
             "steps": self.steps,
-            "turns": self.turns,
-            "parse_errors": self.parse_errors,
             "termination_reason": self.termination_reason,
             "error": self.error,
             "actions": self.actions,
@@ -200,8 +182,6 @@ def run_alfworld_batch(
         active_indices = [index for index, state in enumerate(states) if state.active]
         if not active_indices:
             break
-        for index in active_indices:
-            states[index].turns += 1
 
         responses: dict[int, str] = {}
         with ThreadPoolExecutor(max_workers=len(active_indices)) as executor:
@@ -226,13 +206,7 @@ def run_alfworld_batch(
         for index, response in responses.items():
             if not states[index].active:
                 continue
-            try:
-                actions[index] = parse_action(response)
-            except ActionParseError as exc:
-                state = states[index]
-                state.parse_errors += 1
-                state.error = str(exc)
-                state.messages.append({"role": "user", "content": ACTION_RETRY_MESSAGE})
+            actions[index] = parse_action(response)
 
         if not actions:
             continue
@@ -265,5 +239,5 @@ def run_alfworld_batch(
 
     for state in states:
         if state.active:
-            state.finish("max_steps", error=state.error)
+            state.finish("max_steps")
     return [state.as_result() for state in states]

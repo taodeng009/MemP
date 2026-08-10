@@ -13,7 +13,6 @@ The available actions are:
 9. cool {obj} with {recep}
 where {obj} and {recep} correspond to objects and receptacles.
 After your each turn, the environment will give you immediate feedback based on which you plan your next few steps. if the envrionment output "Nothing happened", that means the previous action is invalid and you should try more options.
-Only the environment can determine that the task is complete. Until the environment ends the task, always output one of the valid actions above; never output "task completed", "done", or another stop declaration as the action.
 
 Your response should use the following format:
 

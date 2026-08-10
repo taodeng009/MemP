@@ -4,7 +4,6 @@ from pathlib import Path
 
 from ProcedureMem.Alfworld.prompts import alfworld_system_prompt
 from ProcedureMem.alfworld_agent import (
-    ActionParseError,
     parse_action,
     resolve_litellm_model,
     run_alfworld_batch,
@@ -78,11 +77,11 @@ class AlfworldActionParserTests(unittest.TestCase):
             with self.subTest(response=response):
                 self.assertEqual(parse_action(response), expected)
 
-    def test_rejects_empty_and_unsupported_actions(self):
-        for response in ("", "Thought only", "Action: dance", "Action: put apple on table"):
-            with self.subTest(response=response):
-                with self.assertRaises(ActionParseError):
-                    parse_action(response)
+    def test_forwards_unsupported_or_empty_actions_to_alfworld(self):
+        self.assertEqual(parse_action("Action: task completed"), "task completed")
+        self.assertEqual(parse_action("Action: dance"), "dance")
+        self.assertEqual(parse_action("Thought only"), "")
+        self.assertEqual(parse_action(""), "")
 
     def test_prompt_and_examples_use_the_same_action_vocabulary(self):
         self.assertIn("move {obj} to {recep}", alfworld_system_prompt)
@@ -147,8 +146,16 @@ class AlfworldBatchRunnerTests(unittest.TestCase):
         self.assertIn("retries exhausted", results[0]["error"])
         self.assertEqual(results[1]["termination_reason"], "success")
 
-    def test_parse_failure_does_not_step_a_single_task(self):
-        env = ImmediateSuccessEnv()
+    def test_missing_action_is_sent_to_the_environment(self):
+        class InvalidActionEnv:
+            def __init__(self):
+                self.actions = []
+
+            def step(self, actions):
+                self.actions.append(actions)
+                return ["Nothing happened."], [0], [False], {"won": [False]}
+
+        env = InvalidActionEnv()
         results = run_alfworld_batch(
             env=env,
             observations=["task"],
@@ -159,38 +166,44 @@ class AlfworldBatchRunnerTests(unittest.TestCase):
             max_steps=3,
         )
 
-        self.assertEqual(env.actions, [])
+        self.assertEqual(env.actions, [[""], [""], [""]])
         self.assertEqual(results[0]["termination_reason"], "max_steps")
-        self.assertEqual(results[0]["steps"], 0)
-        self.assertEqual(results[0]["turns"], 3)
-        self.assertEqual(results[0]["parse_errors"], 3)
+        self.assertEqual(results[0]["steps"], 3)
         self.assertFalse(results[0]["reward"])
 
-    def test_premature_completion_is_reprompted_until_an_action_succeeds(self):
-        env = ImmediateSuccessEnv()
-        responses = iter(
-            (
-                "Thought: finished\nAction: task completed",
-                "Thought: continue\nAction: go to table 1",
-            )
-        )
+    def test_premature_completion_gets_native_environment_feedback(self):
+        class NativeFeedbackEnv:
+            def __init__(self):
+                self.actions = []
+
+            def step(self, actions):
+                self.actions.append(actions)
+                if len(self.actions) == 1:
+                    return ["Nothing happened."], [0], [False], {"won": [False]}
+                return ["done"], [0], [True], {"won": [True]}
+
+        env = NativeFeedbackEnv()
+
+        def llm(messages):
+            if any("Nothing happened" in message["content"] for message in messages):
+                return "Thought: continue\nAction: go to table 1"
+            return "Thought: finished\nAction: task completed"
+
         results = run_alfworld_batch(
             env=env,
             observations=["task"],
             names=["task"],
-            llm_fn=lambda _: next(responses),
+            llm_fn=llm,
             system_prompt="system",
             few_shot=False,
             max_steps=3,
         )
 
-        self.assertEqual(env.actions, [["go to table 1"]])
+        self.assertEqual(env.actions, [["task completed"], ["go to table 1"]])
         self.assertEqual(results[0]["termination_reason"], "success")
-        self.assertEqual(results[0]["steps"], 1)
-        self.assertEqual(results[0]["turns"], 2)
-        self.assertEqual(results[0]["parse_errors"], 1)
+        self.assertEqual(results[0]["steps"], 2)
         self.assertIsNone(results[0]["error"])
-        self.assertIn("environment has not ended", results[0]["messages"][-3]["content"])
+        self.assertIn("Nothing happened", results[0]["messages"][-3]["content"])
 
     def test_active_task_ends_at_max_steps(self):
         class NeverDoneEnv:
@@ -209,7 +222,6 @@ class AlfworldBatchRunnerTests(unittest.TestCase):
 
         self.assertEqual(results[0]["termination_reason"], "max_steps")
         self.assertEqual(results[0]["steps"], 2)
-        self.assertEqual(results[0]["turns"], 2)
 
     def test_environment_failure_is_recorded_for_each_stepped_task(self):
         class BrokenEnv:
