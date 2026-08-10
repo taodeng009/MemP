@@ -41,8 +41,17 @@ class AlfworldMemoryPromptTests(unittest.TestCase):
 
     def test_manifest_records_prompt_provenance(self):
         spec = get_prompt_spec("direct")
-        manifest = build_prompt_manifest("direct")
+        manifest = build_prompt_manifest(
+            "direct",
+            build_model="builder-model",
+            trajectory_file="/data/alfworld_format_traj.json",
+            trajectory_count=300,
+        )
 
+        self.assertEqual(manifest["schema_version"], 2)
+        self.assertEqual(manifest["build_model"], "builder-model")
+        self.assertEqual(manifest["trajectory_file"], "/data/alfworld_format_traj.json")
+        self.assertEqual(manifest["trajectory_count"], 300)
         self.assertEqual(manifest["prompt"]["version"], PROMPT_VERSION)
         self.assertEqual(manifest["prompt"]["source"], PROMPT_SOURCE)
         self.assertEqual(manifest["prompt"]["approval"], PROMPT_APPROVAL)

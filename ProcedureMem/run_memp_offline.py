@@ -166,6 +166,7 @@ def main(args):
             "memory_dir": str(DEFAULT_MEMORY_DIR),
             "memory_size": 300,
             "prompt_domain": "alfworld",
+            "build_model": args.memory_build_model,
         }
         Pro_Mem = Memory(**memory_config)
 
@@ -243,6 +244,7 @@ if __name__ == '__main__':
     parser.add_argument('--exp_name', type=str, default='')
     parser.add_argument('--few_shot', action='store_true')
     parser.add_argument('--use_memory', action='store_true')
+    parser.add_argument('--memory-build-model', help='LLM used only for trajectory-to-workflow construction')
     parser.add_argument('--alfworld-data', help='ALFWorld data root; defaults to ALFWORLD_DATA or ~/.cache/alfworld')
     parser.add_argument('--config', default=str(DEFAULT_ALFWORLD_CONFIG), help='ALFWorld YAML config')
     args = parser.parse_args()

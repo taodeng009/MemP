@@ -51,6 +51,10 @@ export EMBEDDING_MODEL_KEY=YOUR_EMBEDDING_MODEL_KEY
 export EMBEDDING_MODEL_BASE_URL=YOUR_EMBEDDING_MODEL_BASE_URL
 ```
 
+To build workflow memory with a model different from the acting model, set
+`MEMORY_BUILD_MODEL_NAME` or pass `--memory-build-model`. If omitted, memory
+construction falls back to the agent model supplied by `--model`.
+
 For ALFWorld, use a Linux environment with Python 3.9 or 3.10. This repository
 pins `alfworld==0.4.2` to match the MemP experiment environment. Run
 `alfworld-download`, and validate both evaluation splits before calling an LLM:

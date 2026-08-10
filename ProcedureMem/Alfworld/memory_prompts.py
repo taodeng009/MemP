@@ -144,11 +144,21 @@ def get_prompt_spec(build_policy: str) -> PromptSpec:
     )
 
 
-def build_prompt_manifest(build_policy: str) -> dict:
-    return {
-        "schema_version": 1,
+def build_prompt_manifest(
+    build_policy: str,
+    *,
+    build_model: str | None = None,
+    trajectory_file: str | None = None,
+    trajectory_count: int | None = None,
+) -> dict:
+    manifest = {
+        "schema_version": 2,
         "prompt": get_prompt_spec(build_policy).as_dict(),
     }
+    manifest["build_model"] = build_model
+    manifest["trajectory_file"] = trajectory_file
+    manifest["trajectory_count"] = trajectory_count
+    return manifest
 
 
 def prompt_manifest_mismatches(manifest: dict, expected: PromptSpec) -> list[str]:

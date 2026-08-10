@@ -34,6 +34,19 @@ class Memory:
         self.retrieve_num = kwargs.get("retrieve_num", 10)
         self.memory_dir = kwargs.get("memory_dir", "memory")
         self.prompt_domain = kwargs.get("prompt_domain", "alfworld")
+        self.requested_build_model = (
+            kwargs.get("build_model") or os.getenv("MEMORY_BUILD_MODEL_NAME")
+        )
+        self.build_model = self.requested_build_model or os.getenv("MODEL_NAME")
+        if not self.build_model:
+            raise RuntimeError(
+                "Missing memory build model. Set MEMORY_BUILD_MODEL_NAME, pass "
+                "build_model, or configure MODEL_NAME as a fallback."
+            )
+        self.trajectory_file = (
+            os.path.abspath(self.traj_file_path) if self.traj_file_path else None
+        )
+        self.trajectory_count = None
 
         if self.prompt_domain != "alfworld":
             raise ValueError(
@@ -86,7 +99,12 @@ class Memory:
             )
         with open(self.manifest_path, "w", encoding="utf-8") as f:
             json.dump(
-                build_prompt_manifest(self.build_policy),
+                build_prompt_manifest(
+                    self.build_policy,
+                    build_model=self.build_model,
+                    trajectory_file=self.trajectory_file,
+                    trajectory_count=self.trajectory_count,
+                ),
                 f,
                 indent=2,
                 ensure_ascii=False,
@@ -186,6 +204,7 @@ class Memory:
             traj_data = json.load(f)
         if len(traj_data) > self.memory_size:
             traj_data = traj_data[:self.memory_size]
+        current_trajectory_count = len(traj_data)
 
         new_documents = []
         with ThreadPoolExecutor(max_workers=16) as executor:
@@ -200,6 +219,9 @@ class Memory:
         
         # Update documents list and save to disk
         self.documents.extend(new_documents)
+        if self.trajectory_count is None or new_documents:
+            self.trajectory_file = os.path.abspath(self.traj_file_path)
+            self.trajectory_count = current_trajectory_count
         self._save_documents()
 
         print(f"[INFO] {len(new_documents)} new documents added.")
@@ -215,6 +237,12 @@ class Memory:
 
         with open(self.manifest_path, "r", encoding="utf-8") as f:
             manifest = json.load(f)
+        if manifest.get("schema_version") != 2:
+            raise RuntimeError(
+                f"Memory manifest schema mismatch in {self.manifest_path}: "
+                f"found {manifest.get('schema_version')!r}, expected 2. Rebuild the "
+                "memory so its build model and trajectory source are recorded."
+            )
         cached_prompt = manifest.get("prompt", {})
         expected_prompt = self.prompt_spec.as_dict()
         mismatches = prompt_manifest_mismatches(manifest, self.prompt_spec)
@@ -228,6 +256,25 @@ class Memory:
                 "Archive the old cache or choose a new memory_dir; do not mix memories "
                 "built from different prompts."
             )
+
+        cached_build_model = manifest.get("build_model")
+        if not cached_build_model:
+            raise RuntimeError(
+                f"Memory manifest {self.manifest_path} does not record build_model. "
+                "Rebuild the memory in a new memory_dir."
+            )
+        if (
+            self.requested_build_model
+            and self.requested_build_model != cached_build_model
+        ):
+            raise RuntimeError(
+                f"Memory cache was built by {cached_build_model!r}, but "
+                f"{self.requested_build_model!r} was requested. Use the existing "
+                "artifact without --memory-build-model, or choose a new memory_dir."
+            )
+        self.build_model = cached_build_model
+        self.trajectory_file = manifest.get("trajectory_file")
+        self.trajectory_count = manifest.get("trajectory_count")
 
     def _validate_document_prompt_metadata(self):
         incompatible = [
@@ -250,11 +297,23 @@ class Memory:
         """
         # Generate workflow
         if self.build_policy == "round":
-            events = get_llm_response(generate_events_from_trajectory_prompt(query, trajectory), is_string=False)
-            workflow_ids = get_llm_response(generate_workflow_from_events_prompt(query, events), is_string=False)
+            events = get_llm_response(
+                generate_events_from_trajectory_prompt(query, trajectory),
+                is_string=False,
+                model=self.build_model,
+            )
+            workflow_ids = get_llm_response(
+                generate_workflow_from_events_prompt(query, events),
+                is_string=False,
+                model=self.build_model,
+            )
             workflow = [events[wid - 1]['action'] for wid in workflow_ids]
         elif self.build_policy == "direct":
-            workflow = get_llm_response(generate_workflow_from_trajectory_prompt(query, trajectory), is_string=True)
+            workflow = get_llm_response(
+                generate_workflow_from_trajectory_prompt(query, trajectory),
+                is_string=True,
+                model=self.build_model,
+            )
         
         return workflow
 

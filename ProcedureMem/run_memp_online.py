@@ -155,6 +155,7 @@ def main(args):
     if args.use_memory:
         memory_config = load_memory_config(args.memory_config)
         memory_config["memory_dir"] = f"{memory_config['memory_dir']}_{args.exp_name}"
+        memory_config["build_model"] = args.memory_build_model
         Pro_Mem = Memory(**memory_config)
 
     # env init
@@ -246,6 +247,7 @@ if __name__ == '__main__':
     parser.add_argument('--few_shot', action='store_true')
     parser.add_argument('--use_memory', action='store_true')
     parser.add_argument('--overwrite', action='store_true')
+    parser.add_argument('--memory-build-model', help='LLM used only for trajectory-to-workflow construction')
     parser.add_argument('--alfworld-data', help='ALFWorld data root; defaults to ALFWORLD_DATA or ~/.cache/alfworld')
     parser.add_argument('--config', default=str(DEFAULT_ALFWORLD_CONFIG), help='ALFWorld YAML config')
     parser.add_argument('--memory-config', default=str(DEFAULT_MEMORY_CONFIG), help='Memory YAML config')

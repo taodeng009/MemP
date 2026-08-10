@@ -22,10 +22,10 @@ def _get_client():
         kwargs["base_url"] = api_base
     return OpenAI(**kwargs)
 
-def get_response(messages):
+def get_response(messages, model=None):
     client = _get_client()
     response = client.chat.completions.create(
-        model=_required_env("MODEL_NAME"),
+        model=model or _required_env("MODEL_NAME"),
         messages=messages,
         temperature=TEMPERATURE,
         top_p=TOP_P,
@@ -36,8 +36,8 @@ def get_response(messages):
     return response.error.message
 
 @retry(tries=5, delay=5, backoff=2, jitter=(1, 3))
-def get_llm_response(messages, is_string=False):
-    ans = get_response(messages)
+def get_llm_response(messages, is_string=False, model=None):
+    ans = get_response(messages, model=model)
     if is_string:
         return ans
     else:
