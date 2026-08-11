@@ -4,6 +4,12 @@ import tempfile
 import unittest
 from pathlib import Path
 
+try:
+    from langchain_core.embeddings import Embeddings as EmbeddingsBase
+except ModuleNotFoundError:
+    class EmbeddingsBase:  # type: ignore[no-redef]
+        pass
+
 from ProcedureMem.edge_memory import RawTrajectoryMemory, extract_task_episode
 from ProcedureMem.edge_subsets import (
     TASK_FAMILIES,
@@ -31,7 +37,7 @@ def trajectory(query):
     }
 
 
-class FakeEmbeddings:
+class FakeEmbeddings(EmbeddingsBase):
     @staticmethod
     def _vector(text):
         lowered = text.lower()
@@ -49,6 +55,10 @@ class FakeEmbeddings:
 
     def embed_query(self, text):
         return self._vector(text)
+
+    def __call__(self, text):
+        """Support LangChain versions that treat duck-typed embeddings as callables."""
+        return self.embed_query(text)
 
 
 class EdgeSubsetTests(unittest.TestCase):
