@@ -132,21 +132,15 @@ done
 bash scripts/run_alfworld_edge_p0.sh
 ```
 
-脚本默认完成：
+该脚本只依次运行 Edge-50、Edge-100 和 Edge-150 三个 `edge_raw` 条件。它假设以下内容已经存在：
 
-1. 重新验证/生成固定子集；
-2. 创建或复用 134-task manifest；
-3. 构建或加载三个 Edge 索引；
-4. 依次运行 Edge-50、Edge-100、Edge-150；
-5. 生成基础容量汇总。
+- `ProcedureMem/Alfworld/manifests/valid_unseen_seed42_n134.json`；
+- 固定 Edge subset manifest；
+- 三个已经构建好的 Edge FAISS 索引。
 
-默认不重跑 No Memory 和 Cloud MemP-300。如果希望在同一个新结果目录中同时重跑两个参照条件，应在第一次正式运行时使用：
+脚本不生成 task manifest、不构建索引、不运行 No Memory 或 Cloud MemP-300，也不自动做结果汇总。需要调试某个容量时，可以直接从脚本中复制对应的一段命令单独执行。
 
-```bash
-RUN_REFERENCES=1 bash scripts/run_alfworld_edge_p0.sh
-```
-
-不要在已有非空正式结果目录上直接重复运行；为新运行修改脚本中的 `EXPERIMENT_NAME`，避免覆盖旧结果。
+不要在已有非空正式结果目录上直接重复运行；为新运行修改脚本顶部的 `EXPERIMENT_NAME`，避免覆盖旧结果。
 
 ## 7. 正式结果检查
 
@@ -166,6 +160,13 @@ capacity_comparison.json
 capacity_comparison.csv
 task_type_summary.csv
 edge_transitions.csv
+```
+
+三个 Edge 条件完成后，如需生成这些汇总文件，再单独运行：
+
+```bash
+python -m ProcedureMem.summarize_edge_p0 \
+  --results-dir ProcedureMem/Alfworld/results/paired/edge_raw_capacity_v1
 ```
 
 正式验收要求：
