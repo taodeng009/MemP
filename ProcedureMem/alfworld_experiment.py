@@ -14,6 +14,7 @@ from typing import Any, Iterable, Sequence
 MANIFEST_SCHEMA_VERSION = 1
 RESULT_SCHEMA_VERSION = 1
 CONDITIONS = ("no_memory", "memory")
+EVAL_CONDITIONS = CONDITIONS + ("edge_raw",)
 SPLIT_NAMES = {
     "valid_seen": "eval_in_distribution",
     "valid_unseen": "eval_out_of_distribution",
@@ -149,15 +150,27 @@ def retrieval_records(items: Sequence[Any]) -> list[dict[str, Any]]:
         else:
             document, score = item, None
         metadata = document.metadata
-        records.append(
-            {
-                "rank": rank,
-                "task_name": metadata.get("query"),
-                "workflow": metadata.get("workflow"),
-                "score": float(score) if score is not None else None,
-                "source": metadata.get("source"),
-            }
-        )
+        record = {
+            "rank": rank,
+            "task_name": metadata.get("query"),
+            "score": float(score) if score is not None else None,
+            "source": metadata.get("source"),
+        }
+        if metadata.get("memory_type") == "raw_trajectory" or "trajectory" in metadata:
+            record.update(
+                {
+                    "memory_type": "raw_trajectory",
+                    "trajectory": metadata.get("trajectory"),
+                    "trajectory_index": metadata.get("trajectory_index"),
+                    "task_type": metadata.get("task_type"),
+                    "raw_score": float(score) if score is not None else None,
+                    "score_type": "faiss_l2_distance" if score is not None else None,
+                    "higher_is_better": False if score is not None else None,
+                }
+            )
+        else:
+            record["workflow"] = metadata.get("workflow")
+        records.append(record)
     return records
 
 
@@ -173,6 +186,36 @@ def inject_memory(observation: str, records: Sequence[dict[str, Any]]) -> str:
         + "\n\nHere are some guidelines for solving similar tasks:\n"
         + json.dumps(guidelines, indent=2, ensure_ascii=False)
         + "\n"
+    )
+
+
+def _multiline_json_string(value: str) -> str:
+    """Escape JSON-sensitive characters while keeping line breaks readable."""
+    return json.dumps(value, ensure_ascii=False)[1:-1].replace("\\n", "\n")
+
+
+def inject_trajectories(
+    observation: str, records: Sequence[dict[str, Any]]
+) -> str:
+    if not records:
+        return observation
+    rendered = []
+    for record in records:
+        task_name = json.dumps(record["task_name"], ensure_ascii=False)
+        trajectory = _multiline_json_string(record["trajectory"])
+        rendered.append(
+            "  {\n"
+            f'    "task_name": {task_name},\n'
+            '    "trajectory": "\n'
+            f"{trajectory}\n"
+            '"\n'
+            "  }"
+        )
+    return (
+        observation
+        + "\n\nHere are some trajectories for solving similar tasks:\n[\n"
+        + ",\n".join(rendered)
+        + "\n]\n"
     )
 
 

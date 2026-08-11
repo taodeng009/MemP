@@ -7,6 +7,7 @@ from ProcedureMem.alfworld_experiment import (
     build_paired_comparison,
     build_task_manifest,
     inject_memory,
+    inject_trajectories,
     load_json,
     manifest_sha256,
     retrieval_records,
@@ -193,6 +194,34 @@ class ResultSummaryTests(unittest.TestCase):
         prompt = inject_memory("Your task is to: cool bread", records)
         self.assertIn("find a fridge", prompt)
         self.assertEqual(task_query("room\nYour task is to: cool bread"), "cool bread")
+
+    def test_raw_trajectory_retrieval_is_recorded_and_injected(self):
+        records = retrieval_records(
+            [
+                (
+                    FakeDocument(
+                        memory_type="raw_trajectory",
+                        query="put a clean potato in microwave",
+                        trajectory=(
+                            "Human:\nroom\n\nYour task is to: clean potato\n\n"
+                            "Assistant:\nThought: find it\nAction: go to fridge 1"
+                        ),
+                        trajectory_index=7,
+                        task_type="clean_then_place",
+                        source="alfworld",
+                    ),
+                    0.125,
+                )
+            ]
+        )
+        self.assertEqual(records[0]["trajectory_index"], 7)
+        self.assertEqual(records[0]["raw_score"], 0.125)
+        self.assertFalse(records[0]["higher_is_better"])
+        prompt = inject_trajectories("current observation", records)
+        self.assertIn("Here are some trajectories for solving similar tasks:", prompt)
+        self.assertIn('"task_name": "put a clean potato in microwave"', prompt)
+        self.assertIn("Human:\nroom", prompt)
+        self.assertNotIn("guidelines", prompt)
 
 
 if __name__ == "__main__":

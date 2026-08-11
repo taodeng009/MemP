@@ -13,10 +13,11 @@ from typing import Any, Sequence
 from ProcedureMem.Alfworld.prompts import alfworld_system_prompt
 from ProcedureMem.alfworld_agent import resolve_litellm_model, run_alfworld_batch
 from ProcedureMem.alfworld_experiment import (
-    CONDITIONS,
+    EVAL_CONDITIONS,
     SPLIT_NAMES,
     build_task_manifest,
     inject_memory,
+    inject_trajectories,
     load_json,
     manifest_sha256,
     maybe_write_paired_comparison,
@@ -32,15 +33,18 @@ from ProcedureMem.runtime_config import (
     DEFAULT_EXAMPLES_PATH,
     DEFAULT_MEMORY_CONFIG,
     DEFAULT_RESULTS_DIR,
+    DEFAULT_TRAJECTORY_PATH,
     configure_runtime,
     load_alfworld_config,
     load_memory_config,
 )
+from ProcedureMem.build_edge_subsets import DEFAULT_OUTPUT as DEFAULT_EDGE_SUBSET_MANIFEST
 
 
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--condition", choices=CONDITIONS, required=True)
+    parser.add_argument("--condition", choices=EVAL_CONDITIONS, required=True)
+    parser.add_argument("--condition-name")
     parser.add_argument("--split", choices=tuple(SPLIT_NAMES), default="valid_unseen")
     parser.add_argument("--seed", type=int, default=42)
     parser.add_argument("--task-manifest", type=Path)
@@ -54,9 +58,16 @@ def build_parser() -> argparse.ArgumentParser:
         "--few-shot", action=argparse.BooleanOptionalAction, default=True
     )
     parser.add_argument("--top-k", type=int, default=3)
+    parser.add_argument("--score-threshold", type=float)
     parser.add_argument("--model")
     parser.add_argument("--memory-build-model")
     parser.add_argument("--memory-config", default=str(DEFAULT_MEMORY_CONFIG))
+    parser.add_argument("--edge-capacity", type=int)
+    parser.add_argument(
+        "--edge-subset-manifest", type=Path, default=DEFAULT_EDGE_SUBSET_MANIFEST
+    )
+    parser.add_argument("--edge-memory-dir", type=Path)
+    parser.add_argument("--trajectory-file", type=Path, default=DEFAULT_TRAJECTORY_PATH)
     parser.add_argument("--alfworld-data")
     parser.add_argument("--config", default=str(DEFAULT_ALFWORLD_CONFIG))
     parser.add_argument("--experiment-name", default="alfworld_paired")
@@ -75,6 +86,16 @@ def _validate_args(parser: argparse.ArgumentParser, args: argparse.Namespace) ->
         parser.error("--experiment-name cannot be empty")
     if Path(args.experiment_name).name != args.experiment_name:
         parser.error("--experiment-name must be a name, not a path")
+    if args.condition_name and Path(args.condition_name).name != args.condition_name:
+        parser.error("--condition-name must be a name, not a path")
+    if args.score_threshold is not None and args.score_threshold < 0:
+        parser.error("--score-threshold must be non-negative")
+    if args.condition == "edge_raw" and args.edge_capacity is None:
+        parser.error("--edge-capacity is required for --condition edge_raw")
+    if args.condition != "edge_raw" and args.edge_capacity is not None:
+        parser.error("--edge-capacity is only valid for --condition edge_raw")
+    if args.condition != "edge_raw" and args.score_threshold is not None:
+        parser.error("--score-threshold is only valid for --condition edge_raw")
 
 
 def _default_manifest_path(split: str, seed: int, limit_tasks: int | None) -> Path:
@@ -121,6 +142,25 @@ def _load_memory(args: argparse.Namespace):
     config["build_model"] = args.memory_build_model
     config["is_cold_start"] = True
     return Memory(**config)
+
+
+def _load_edge_memory(args: argparse.Namespace):
+    from ProcedureMem.edge_memory import RawTrajectoryMemory
+
+    memory_dir = args.edge_memory_dir or (
+        Path(__file__).resolve().parent
+        / "memory"
+        / "alfworld"
+        / f"edge_raw_{args.edge_capacity}"
+    )
+    return RawTrajectoryMemory(
+        trajectory_file=args.trajectory_file,
+        subset_manifest=args.edge_subset_manifest,
+        capacity=args.edge_capacity,
+        memory_dir=memory_dir,
+        top_k=args.top_k,
+        score_threshold=args.score_threshold,
+    )
 
 
 def _task_name(task_id: str) -> str:
@@ -194,17 +234,28 @@ def main(argv: Sequence[str] | None = None) -> int:
         model_name=args.model,
         alfworld_data=args.alfworld_data,
         require_llm=True,
-        require_embedding=args.condition == "memory",
+        require_embedding=args.condition in {"memory", "edge_raw"},
     )
     llm, routed_model = _make_llm(settings.model_name, args.temperature, manifest["seed"])
-    memory = _load_memory(args) if args.condition == "memory" else None
+    if args.condition == "memory":
+        memory = _load_memory(args)
+    elif args.condition == "edge_raw":
+        memory = _load_edge_memory(args)
+    else:
+        memory = None
+
+    condition_name = args.condition_name or (
+        f"edge_raw_{args.edge_capacity}"
+        if args.condition == "edge_raw"
+        else args.condition
+    )
 
     experiment_dir = (
         args.output_dir.resolve()
         if args.output_dir
         else DEFAULT_RESULTS_DIR / "paired" / args.experiment_name
     )
-    condition_dir = experiment_dir / args.condition
+    condition_dir = experiment_dir / condition_name
     _prepare_output(condition_dir, args.overwrite)
 
     parameters = {
@@ -213,7 +264,8 @@ def main(argv: Sequence[str] | None = None) -> int:
         "agent_api_base_url": settings.api_base_url,
         "embedding_model": settings.embedding_model,
         "split": args.split,
-        "condition": args.condition,
+        "condition": condition_name,
+        "condition_mode": args.condition,
         "seed": manifest["seed"],
         "batch_size": args.batch_size,
         "max_steps": args.max_steps,
@@ -221,8 +273,27 @@ def main(argv: Sequence[str] | None = None) -> int:
         "top_p": 1.0,
         "few_shot": args.few_shot,
         "top_k": args.top_k,
-        "memory_config": str(Path(args.memory_config).resolve()),
-        "memory_build_model": args.memory_build_model,
+        "score_threshold": args.score_threshold,
+        "memory_type": (
+            "raw_trajectory"
+            if args.condition == "edge_raw"
+            else "workflow" if args.condition == "memory" else None
+        ),
+        "memory_config": (
+            str(Path(args.memory_config).resolve()) if args.condition == "memory" else None
+        ),
+        "memory_build_model": (
+            args.memory_build_model if args.condition == "memory" else None
+        ),
+        "edge_capacity": args.edge_capacity,
+        "edge_subset_manifest": (
+            str(args.edge_subset_manifest.resolve())
+            if args.condition == "edge_raw"
+            else None
+        ),
+        "edge_memory_dir": (
+            str(memory.memory_dir) if args.condition == "edge_raw" else None
+        ),
         "manifest": str(manifest_path.resolve()),
         "manifest_sha256": manifest_sha256(manifest),
     }
@@ -261,8 +332,19 @@ def main(argv: Sequence[str] | None = None) -> int:
                     retrieved = retrieval_records(
                         memory.retrieve(task_query(observation))
                     )
+                    if (
+                        args.condition == "edge_raw"
+                        and args.score_threshold is None
+                        and not retrieved
+                    ):
+                        raise RuntimeError(
+                            "Edge retrieval returned no trajectory with threshold disabled"
+                        )
                     retrieved_by_task[index] = retrieved
-                    observations[index] = inject_memory(observation, retrieved)
+                    if args.condition == "edge_raw":
+                        observations[index] = inject_trajectories(observation, retrieved)
+                    else:
+                        observations[index] = inject_memory(observation, retrieved)
 
             batch_results = run_alfworld_batch(
                 env=env,
@@ -279,6 +361,8 @@ def main(argv: Sequence[str] | None = None) -> int:
                 env.close()
 
         for local_index, (task_id, result) in enumerate(zip(actual_ids, batch_results)):
+            retrieved_records = retrieved_by_task[local_index]
+            top1_record = retrieved_records[0] if retrieved_records else {}
             result.update(
                 {
                     "schema_version": 1,
@@ -287,8 +371,13 @@ def main(argv: Sequence[str] | None = None) -> int:
                     "task_index": offset + local_index,
                     "task_type": _task_name(task_id).split("/", 1)[0],
                     "split": args.split,
-                    "condition": args.condition,
-                    "retrieved_memories": retrieved_by_task[local_index],
+                    "condition": condition_name,
+                    "condition_mode": args.condition,
+                    "edge_capacity": args.edge_capacity,
+                    "retrieved_count": len(retrieved_records),
+                    "top1_raw_score": top1_record.get("raw_score"),
+                    "top1_trajectory_index": top1_record.get("trajectory_index"),
+                    "retrieved_memories": retrieved_records,
                     "model": settings.model_name,
                     "parameters": parameters,
                 }
@@ -306,7 +395,7 @@ def main(argv: Sequence[str] | None = None) -> int:
         },
     )
     print(
-        f"{args.condition}: SR={summary['success_rate']:.4f} "
+        f"{condition_name}: SR={summary['success_rate']:.4f} "
         f"({summary['success_count']}/{summary['task_count']})"
     )
     comparison = maybe_write_paired_comparison(experiment_dir)
