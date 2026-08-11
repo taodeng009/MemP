@@ -132,13 +132,22 @@ done
 bash scripts/run_alfworld_edge_p0.sh
 ```
 
-该脚本只依次运行 Edge-50、Edge-100 和 Edge-150 三个 `edge_raw` 条件。它假设以下内容已经存在：
+该脚本每次只运行一个 `edge_raw` 条件。运行前在脚本顶部设置：
+
+```bash
+# 可选值：50、100、150
+EDGE_CAPACITY=50
+```
+
+分别将该值改为 50、100、150 并各运行一次，即可完成三个容量的评测。索引目录和结果 condition 名称会根据容量自动选择。
+
+脚本假设以下内容已经存在：
 
 - `ProcedureMem/Alfworld/manifests/valid_unseen_seed42_n134.json`；
 - 固定 Edge subset manifest；
 - 三个已经构建好的 Edge FAISS 索引。
 
-脚本不生成 task manifest、不构建索引、不运行 No Memory 或 Cloud MemP-300，也不自动做结果汇总。需要调试某个容量时，可以直接从脚本中复制对应的一段命令单独执行。
+脚本不生成 task manifest、不构建索引、不运行 No Memory 或 Cloud MemP-300，也不自动做结果汇总。需要调试时，可以直接复制脚本中的唯一一条评测命令执行。
 
 不要在已有非空正式结果目录上直接重复运行；为新运行修改脚本顶部的 `EXPERIMENT_NAME`，避免覆盖旧结果。
 
