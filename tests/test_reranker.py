@@ -9,9 +9,10 @@ from ProcedureMem.reranker import OpenMemReranker, RerankerError
 
 
 class FakeResponse:
-    def __init__(self, payload=None, *, error=None):
+    def __init__(self, payload=None, *, error=None, status_code=200):
         self.payload = payload
         self.error = error
+        self.status_code = status_code
 
     def raise_for_status(self):
         if self.error is not None:
@@ -55,6 +56,39 @@ class OpenMemRerankerTests(unittest.TestCase):
         self.assertEqual(response.results, ())
         session.post.assert_not_called()
 
+    def test_accepts_data_wrapped_success_response(self):
+        session = Mock()
+        session.post.return_value = FakeResponse(
+            {
+                "code": 0,
+                "data": {
+                    "id": "wrapped-request",
+                    "results": [{"index": 0, "relevance_score": 0.8}],
+                },
+            }
+        )
+        response = OpenMemReranker(api_key="secret", session=session).rerank(
+            query="task", documents=["candidate"], top_n=1
+        )
+        self.assertEqual(response.request_id, "wrapped-request")
+        self.assertEqual(response.results[0].index, 0)
+
+    def test_business_error_is_reported_and_secrets_are_redacted(self):
+        session = Mock()
+        session.post.return_value = FakeResponse(
+            {
+                "code": 40132,
+                "message": "API key invalid",
+                "api_key": "server-echoed-secret",
+            }
+        )
+        reranker = OpenMemReranker(api_key="client-secret", session=session)
+        with self.assertRaisesRegex(RerankerError, "40132") as raised:
+            reranker.rerank(query="task", documents=["candidate"], top_n=1)
+        message = str(raised.exception)
+        self.assertNotIn("server-echoed-secret", message)
+        self.assertNotIn("client-secret", message)
+
     def test_timeout_and_non_2xx_are_wrapped(self):
         for error in (TimeoutError("slow"), RuntimeError("bad status")):
             with self.subTest(error=type(error).__name__):
@@ -62,7 +96,10 @@ class OpenMemRerankerTests(unittest.TestCase):
                 if isinstance(error, TimeoutError):
                     session.post.side_effect = error
                 else:
-                    session.post.return_value = FakeResponse(error=error)
+                    session.post.return_value = FakeResponse(
+                        {"code": 50000, "message": "bad status"},
+                        status_code=500,
+                    )
                 reranker = OpenMemReranker(api_key="secret", session=session)
                 with self.assertRaises(RerankerError):
                     reranker.rerank(

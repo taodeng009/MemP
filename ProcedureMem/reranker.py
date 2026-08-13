@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import os
+import json
 import time
 from dataclasses import dataclass
 from typing import Any, Sequence
@@ -19,6 +20,29 @@ DEFAULT_MODEL = "memos-reranker-4b"
 
 class RerankerError(RuntimeError):
     """Raised when OpenMem cannot provide a usable rerank response."""
+
+
+def _safe_error_payload(payload: Any, *, limit: int = 1000) -> str:
+    """Render a bounded server error without exposing credential-like fields."""
+    sensitive_fragments = ("key", "token", "authorization", "secret")
+
+    def sanitize(value: Any) -> Any:
+        if isinstance(value, dict):
+            return {
+                str(key): "<redacted>"
+                if any(fragment in str(key).lower() for fragment in sensitive_fragments)
+                else sanitize(item)
+                for key, item in value.items()
+            }
+        if isinstance(value, list):
+            return [sanitize(item) for item in value]
+        return value
+
+    try:
+        rendered = json.dumps(sanitize(payload), ensure_ascii=False, separators=(",", ":"))
+    except (TypeError, ValueError):
+        rendered = repr(payload)
+    return rendered if len(rendered) <= limit else rendered[:limit] + "..."
 
 
 @dataclass(frozen=True)
@@ -95,15 +119,37 @@ class OpenMemReranker:
                 },
                 timeout=self.timeout,
             )
-            response.raise_for_status()
             payload: dict[str, Any] = response.json()
         except Exception as exc:
             raise RerankerError(f"OpenMem rerank request failed: {exc}") from exc
         latency_ms = (time.perf_counter() - started) * 1000.0
 
-        raw_results = payload.get("results")
+        status_code = getattr(response, "status_code", None)
+        safe_payload = _safe_error_payload(payload).replace(
+            self.api_key, "<redacted>"
+        )
+        if status_code is not None and not 200 <= int(status_code) < 300:
+            raise RerankerError(
+                f"OpenMem rerank HTTP {status_code}: {safe_payload}"
+            )
+        if not isinstance(payload, dict):
+            raise RerankerError(
+                f"OpenMem returned non-object JSON: {safe_payload}"
+            )
+
+        # Some deployments wrap the documented response in a top-level `data` object.
+        response_payload = payload
+        if not isinstance(response_payload.get("results"), list):
+            wrapped = response_payload.get("data")
+            if isinstance(wrapped, dict):
+                response_payload = wrapped
+
+        raw_results = response_payload.get("results")
         if not isinstance(raw_results, list):
-            raise RerankerError("OpenMem response has no results list")
+            raise RerankerError(
+                "OpenMem response has no results list; server response: "
+                + safe_payload
+            )
         parsed: list[RerankResult] = []
         for item in raw_results:
             try:
@@ -115,11 +161,15 @@ class OpenMemReranker:
                 raise RerankerError(f"OpenMem returned out-of-range index {index}")
             parsed.append(RerankResult(index=index, relevance_score=score))
 
-        usage = payload.get("usage") if isinstance(payload.get("usage"), dict) else {}
+        usage = (
+            response_payload.get("usage")
+            if isinstance(response_payload.get("usage"), dict)
+            else {}
+        )
         return RerankResponse(
             results=tuple(parsed),
             latency_ms=latency_ms,
-            request_id=payload.get("id"),
+            request_id=response_payload.get("id"),
             prompt_tokens=usage.get("prompt_tokens"),
             total_tokens=usage.get("total_tokens"),
         )
