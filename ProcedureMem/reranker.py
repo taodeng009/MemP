@@ -60,6 +60,14 @@ class RerankResponse:
     total_tokens: int | None = None
 
 
+def format_workflow_candidate(document: Any) -> str:
+    """Render the task and workflow fields seen by the reranker."""
+    return (
+        f"Task goal: {document.metadata.get('query', document.page_content)}\n"
+        f"Reusable workflow: {document.metadata.get('workflow', '')}"
+    )
+
+
 class OpenMemReranker:
     """Call OpenMem's ``POST /rerank`` endpoint with a persistent HTTP session."""
 

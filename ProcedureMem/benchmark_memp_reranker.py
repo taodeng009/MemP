@@ -13,7 +13,11 @@ from typing import Any, Sequence
 
 from ProcedureMem.benchmark_config import candidate_score_threshold
 from ProcedureMem.benchmark_stats import latency_summary
-from ProcedureMem.reranker import DEFAULT_MODEL, OpenMemReranker
+from ProcedureMem.reranker import (
+    DEFAULT_MODEL,
+    OpenMemReranker,
+    format_workflow_candidate,
+)
 from ProcedureMem.runtime_config import (
     DEFAULT_MEMORY_DIR,
     DEFAULT_RESULTS_DIR,
@@ -118,13 +122,6 @@ def _load_workflow_store(memory_dir: Path) -> tuple[Any, list[Any]]:
     return FAISS.from_documents(documents, cached), documents
 
 
-def _rerank_text(document: Any) -> str:
-    return (
-        f"Task goal: {document.metadata.get('query', document.page_content)}\n"
-        f"Reusable workflow: {document.metadata.get('workflow', '')}"
-    )
-
-
 def _candidate_record(
     document: Any,
     *,
@@ -206,7 +203,7 @@ def run_benchmark(args: argparse.Namespace) -> dict[str, Any]:
             raise RuntimeError("FAISS returned no candidates during warmup")
         reranker.rerank(
             query=tasks[0]["query"],
-            documents=[_rerank_text(document) for document, _ in candidates],
+            documents=[format_workflow_candidate(document) for document, _ in candidates],
             top_n=args.top_n,
         )
 
@@ -232,7 +229,7 @@ def run_benchmark(args: argparse.Namespace) -> dict[str, Any]:
                 raise RuntimeError(f"FAISS returned no candidates for {task['task_id']}")
             response = reranker.rerank(
                 query=task["query"],
-                documents=[_rerank_text(document) for document, _ in candidates],
+                documents=[format_workflow_candidate(document) for document, _ in candidates],
                 top_n=args.top_n,
             )
             pipeline_latency = (time.perf_counter() - pipeline_started) * 1000.0

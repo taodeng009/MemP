@@ -3,10 +3,13 @@
 from __future__ import annotations
 
 import argparse
+import hashlib
 import json
 import os
 import random
 import shutil
+import statistics
+import time
 from pathlib import Path
 from typing import Any, Sequence
 
@@ -21,6 +24,8 @@ from ProcedureMem.alfworld_experiment import (
     load_json,
     manifest_sha256,
     maybe_write_paired_comparison,
+    maybe_write_memory_rerank_comparison,
+    reranked_retrieval_records,
     retrieval_records,
     task_id_from_gamefile,
     task_query,
@@ -39,6 +44,8 @@ from ProcedureMem.runtime_config import (
     load_memory_config,
 )
 from ProcedureMem.build_edge_subsets import DEFAULT_OUTPUT as DEFAULT_EDGE_SUBSET_MANIFEST
+from ProcedureMem.benchmark_config import candidate_score_threshold
+from ProcedureMem.reranker import DEFAULT_MODEL, OpenMemReranker
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -59,6 +66,11 @@ def build_parser() -> argparse.ArgumentParser:
     )
     parser.add_argument("--top-k", type=int, default=3)
     parser.add_argument("--score-threshold", type=float)
+    parser.add_argument("--rerank-candidate-k", type=int, default=20)
+    parser.add_argument("--rerank-top-n", type=int, default=10)
+    parser.add_argument("--rerank-model", default=DEFAULT_MODEL)
+    parser.add_argument("--rerank-timeout", type=float)
+    parser.add_argument("--candidate-score-threshold", type=float)
     parser.add_argument("--model")
     parser.add_argument("--memory-build-model")
     parser.add_argument("--memory-config", default=str(DEFAULT_MEMORY_CONFIG))
@@ -96,6 +108,25 @@ def _validate_args(parser: argparse.ArgumentParser, args: argparse.Namespace) ->
         parser.error("--edge-capacity is only valid for --condition edge_raw")
     if args.condition != "edge_raw" and args.score_threshold is not None:
         parser.error("--score-threshold is only valid for --condition edge_raw")
+    if args.condition == "memory_rerank":
+        if args.rerank_candidate_k < 1 or args.rerank_top_n < 1:
+            parser.error("rerank candidate-k and top-n must be at least 1")
+        if args.rerank_top_n > args.rerank_candidate_k:
+            parser.error("--rerank-top-n cannot exceed --rerank-candidate-k")
+        if args.rerank_model != DEFAULT_MODEL:
+            parser.error(f"--rerank-model must be {DEFAULT_MODEL}")
+        if args.rerank_timeout is not None and args.rerank_timeout <= 0:
+            parser.error("--rerank-timeout must be positive")
+        try:
+            args.candidate_score_threshold = candidate_score_threshold(
+                args.candidate_score_threshold
+            )
+        except ValueError as exc:
+            parser.error(str(exc))
+    elif args.candidate_score_threshold is not None:
+        parser.error(
+            "--candidate-score-threshold is only valid for --condition memory_rerank"
+        )
 
 
 def _default_manifest_path(split: str, seed: int, limit_tasks: int | None) -> Path:
@@ -138,10 +169,17 @@ def _load_memory(args: argparse.Namespace):
     from ProcedureMem.memory import Memory
 
     config = load_memory_config(args.memory_config)
-    config["retrieve_num"] = args.top_k
+    config["retrieve_num"] = (
+        args.rerank_top_n if args.condition == "memory_rerank" else args.top_k
+    )
     config["build_model"] = args.memory_build_model
     config["is_cold_start"] = True
     return Memory(**config)
+
+
+def _memory_identity(record: dict[str, Any]) -> str:
+    payload = f"{record.get('task_name')}\0{record.get('workflow')}"
+    return hashlib.sha256(payload.encode("utf-8")).hexdigest()
 
 
 def _load_edge_memory(args: argparse.Namespace):
@@ -234,15 +272,20 @@ def main(argv: Sequence[str] | None = None) -> int:
         model_name=args.model,
         alfworld_data=args.alfworld_data,
         require_llm=True,
-        require_embedding=args.condition in {"memory", "edge_raw"},
+        require_embedding=args.condition in {"memory", "memory_rerank", "edge_raw"},
     )
     llm, routed_model = _make_llm(settings.model_name, args.temperature, manifest["seed"])
-    if args.condition == "memory":
+    if args.condition in {"memory", "memory_rerank"}:
         memory = _load_memory(args)
     elif args.condition == "edge_raw":
         memory = _load_edge_memory(args)
     else:
         memory = None
+    reranker = (
+        OpenMemReranker(model=args.rerank_model, timeout=args.rerank_timeout)
+        if args.condition == "memory_rerank"
+        else None
+    )
 
     condition_name = args.condition_name or (
         f"edge_raw_{args.edge_capacity}"
@@ -272,18 +315,51 @@ def main(argv: Sequence[str] | None = None) -> int:
         "temperature": args.temperature,
         "top_p": 1.0,
         "few_shot": args.few_shot,
-        "top_k": args.top_k,
+        "top_k": (
+            args.rerank_top_n if args.condition == "memory_rerank" else args.top_k
+        ),
         "score_threshold": args.score_threshold,
         "memory_type": (
             "raw_trajectory"
             if args.condition == "edge_raw"
-            else "workflow" if args.condition == "memory" else None
+            else "workflow"
+            if args.condition in {"memory", "memory_rerank"}
+            else None
+        ),
+        "retrieval_pipeline": (
+            "faiss_then_openmem_rerank"
+            if args.condition == "memory_rerank"
+            else "faiss_similarity"
+            if args.condition == "memory"
+            else None
         ),
         "memory_config": (
-            str(Path(args.memory_config).resolve()) if args.condition == "memory" else None
+            str(Path(args.memory_config).resolve())
+            if args.condition in {"memory", "memory_rerank"}
+            else None
         ),
         "memory_build_model": (
-            args.memory_build_model if args.condition == "memory" else None
+            args.memory_build_model
+            if args.condition in {"memory", "memory_rerank"}
+            else None
+        ),
+        "rerank_model": args.rerank_model if args.condition == "memory_rerank" else None,
+        "rerank_candidate_k": (
+            args.rerank_candidate_k if args.condition == "memory_rerank" else None
+        ),
+        "rerank_top_n": (
+            args.rerank_top_n if args.condition == "memory_rerank" else None
+        ),
+        "rerank_timeout": (
+            reranker.timeout if args.condition == "memory_rerank" else None
+        ),
+        "rerank_candidate_score_threshold": (
+            args.candidate_score_threshold
+            if args.condition == "memory_rerank"
+            else None
+        ),
+        "rerank_base_url": (
+            reranker.base_url if args.condition == "memory_rerank" else None
         ),
         "edge_capacity": args.edge_capacity,
         "edge_subset_manifest": (
@@ -327,11 +403,64 @@ def main(argv: Sequence[str] | None = None) -> int:
             retrieved_by_task: list[list[dict[str, Any]]] = [
                 [] for _ in observations
             ]
+            rerank_by_task: list[dict[str, Any] | None] = [
+                None for _ in observations
+            ]
+            retrieval_by_task: list[dict[str, Any] | None] = [
+                None for _ in observations
+            ]
             if memory is not None:
                 for index, observation in enumerate(observations):
-                    retrieved = retrieval_records(
-                        memory.retrieve(task_query(observation))
-                    )
+                    query = task_query(observation)
+                    if args.condition == "memory_rerank":
+                        rerank_output = memory.retrieve_with_rerank(
+                            query,
+                            reranker=reranker,
+                            candidate_k=args.rerank_candidate_k,
+                            top_n=args.rerank_top_n,
+                            score_threshold=args.candidate_score_threshold,
+                        )
+                        retrieved = reranked_retrieval_records(
+                            rerank_output["items"]
+                        )
+                        vector_top_n = retrieval_records(
+                            rerank_output["candidates"][: args.rerank_top_n]
+                        )
+                        vector_ids = [_memory_identity(item) for item in vector_top_n]
+                        rerank_ids = [_memory_identity(item) for item in retrieved]
+                        overlap = len(set(vector_ids) & set(rerank_ids))
+                        rerank_by_task[index] = {
+                            "actual_candidate_count": len(rerank_output["candidates"]),
+                            "candidate_search_latency_ms": rerank_output[
+                                "candidate_search_latency_ms"
+                            ],
+                            "rerank_api_latency_ms": rerank_output[
+                                "rerank_api_latency_ms"
+                            ],
+                            "rerank_pipeline_latency_ms": rerank_output[
+                                "rerank_pipeline_latency_ms"
+                            ],
+                            "rerank_changed_top1": bool(
+                                vector_ids and rerank_ids and vector_ids[0] != rerank_ids[0]
+                            ),
+                            "rerank_top_n_overlap_count": overlap,
+                            "rerank_top_n_overlap_rate": overlap
+                            / max(1, len(vector_ids)),
+                            "rerank_request_id": rerank_output["request_id"],
+                            "rerank_prompt_tokens": rerank_output["prompt_tokens"],
+                            "rerank_total_tokens": rerank_output["total_tokens"],
+                            "vector_top_n": vector_top_n,
+                        }
+                    else:
+                        retrieval_started = time.perf_counter()
+                        retrieved = retrieval_records(memory.retrieve(query))
+                        if args.condition == "memory":
+                            retrieval_by_task[index] = {
+                                "similarity_search_latency_ms": (
+                                    time.perf_counter() - retrieval_started
+                                )
+                                * 1000.0
+                            }
                     if (
                         args.condition == "edge_raw"
                         and args.score_threshold is None
@@ -363,8 +492,9 @@ def main(argv: Sequence[str] | None = None) -> int:
         for local_index, (task_id, result) in enumerate(zip(actual_ids, batch_results)):
             retrieved_records = retrieved_by_task[local_index]
             top1_record = retrieved_records[0] if retrieved_records else {}
-            result.update(
-                {
+            rerank_record = rerank_by_task[local_index]
+            retrieval_record = retrieval_by_task[local_index]
+            result_fields = {
                     "schema_version": 1,
                     "experiment_name": args.experiment_name,
                     "task_id": task_id,
@@ -381,10 +511,51 @@ def main(argv: Sequence[str] | None = None) -> int:
                     "model": settings.model_name,
                     "parameters": parameters,
                 }
-            )
+            if rerank_record is not None:
+                result_fields["rerank"] = rerank_record
+            if retrieval_record is not None:
+                result_fields["retrieval"] = retrieval_record
+            result.update(result_fields)
             results.append(result)
         print(f"Completed {len(results)}/{len(selected_gamefiles)} tasks")
 
+    rerank_metadata = None
+    if args.condition == "memory_rerank":
+        rerank_rows = [result["rerank"] for result in results]
+        rerank_metadata = {
+            "candidate_count_mean": statistics.fmean(
+                row["actual_candidate_count"] for row in rerank_rows
+            ),
+            "candidate_count_min": min(
+                row["actual_candidate_count"] for row in rerank_rows
+            ),
+            "candidate_count_max": max(
+                row["actual_candidate_count"] for row in rerank_rows
+            ),
+            "rerank_changed_top1_count": sum(
+                row["rerank_changed_top1"] for row in rerank_rows
+            ),
+            "rerank_top_n_overlap_rate_mean": statistics.fmean(
+                row["rerank_top_n_overlap_rate"] for row in rerank_rows
+            ),
+            "candidate_search_latency_ms_mean": statistics.fmean(
+                row["candidate_search_latency_ms"] for row in rerank_rows
+            ),
+            "rerank_api_latency_ms_mean": statistics.fmean(
+                row["rerank_api_latency_ms"] for row in rerank_rows
+            ),
+            "rerank_pipeline_latency_ms_mean": statistics.fmean(
+                row["rerank_pipeline_latency_ms"] for row in rerank_rows
+            ),
+        }
+    retrieval_metadata = None
+    if args.condition == "memory":
+        retrieval_metadata = {
+            "similarity_search_latency_ms_mean": statistics.fmean(
+                result["retrieval"]["similarity_search_latency_ms"]
+                for result in results
+            )
+        }
     summary = write_results(
         condition_dir,
         results,
@@ -392,6 +563,8 @@ def main(argv: Sequence[str] | None = None) -> int:
             "experiment_name": args.experiment_name,
             "model": settings.model_name,
             "parameters": parameters,
+            "rerank_summary": rerank_metadata,
+            "retrieval_summary": retrieval_metadata,
         },
     )
     print(
@@ -403,6 +576,15 @@ def main(argv: Sequence[str] | None = None) -> int:
         print(
             "Paired comparison: "
             f"{comparison['absolute_improvement_percentage_points']:+.2f} percentage points"
+        )
+    rerank_comparison = maybe_write_memory_rerank_comparison(experiment_dir)
+    if rerank_comparison:
+        print(
+            "Memory vs rerank: "
+            f"{rerank_comparison['absolute_improvement_percentage_points']:+.2f} "
+            "percentage points; "
+            f"flips +{rerank_comparison['failure_to_success']} "
+            f"/-{rerank_comparison['success_to_failure']}"
         )
     return 0
 

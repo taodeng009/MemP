@@ -1,6 +1,7 @@
 import json
 import os
 import random
+import time
 import numpy as np
 from tqdm import tqdm
 from langchain_community.vectorstores import FAISS
@@ -25,6 +26,7 @@ from ProcedureMem.memory_utils import (
     cosine_similarity
 )
 from ProcedureMem.memory_adjust import adjust_memory
+from ProcedureMem.reranker import OpenMemReranker, format_workflow_candidate
 
 class Memory:
     def __init__(self, **kwargs):
@@ -385,6 +387,68 @@ class Memory:
 
         else:
             raise ValueError(f"Unknown retrieve policy: {self.retrieve_policy}")
+
+    def retrieve_with_rerank(
+        self,
+        key: str,
+        *,
+        reranker: OpenMemReranker,
+        candidate_k: int = 20,
+        top_n: int = 10,
+        score_threshold: float | None = None,
+    ) -> dict[str, object]:
+        """Retrieve workflow candidates with FAISS, then rerank them with OpenMem."""
+        if self.retrieve_policy != "query":
+            raise ValueError("Reranking currently requires retrieve policy 'query'")
+        if candidate_k < 1 or top_n < 1:
+            raise ValueError("candidate_k and top_n must be at least 1")
+        if top_n > candidate_k:
+            raise ValueError("top_n cannot exceed candidate_k")
+        if score_threshold is not None and score_threshold < 0:
+            raise ValueError("score_threshold must be non-negative")
+
+        pipeline_started = time.perf_counter()
+        search_started = time.perf_counter()
+        search_kwargs = {"k": min(candidate_k, len(self.documents))}
+        if score_threshold is not None:
+            search_kwargs["score_threshold"] = score_threshold
+        candidates = self.vector_store.similarity_search_with_score(
+            key, **search_kwargs
+        )
+        candidate_search_latency_ms = (time.perf_counter() - search_started) * 1000.0
+        if not candidates:
+            raise RuntimeError("FAISS returned no workflow candidates for reranking")
+
+        response = reranker.rerank(
+            query=key,
+            documents=[format_workflow_candidate(doc) for doc, _ in candidates],
+            top_n=min(top_n, len(candidates)),
+        )
+        if not response.results:
+            raise RuntimeError("OpenMem returned no reranked workflow items")
+        reranked = []
+        for rerank_rank, result in enumerate(response.results, start=1):
+            document, vector_score = candidates[result.index]
+            reranked.append(
+                {
+                    "document": document,
+                    "vector_rank": result.index + 1,
+                    "vector_score": float(vector_score),
+                    "rerank_rank": rerank_rank,
+                    "rerank_score": result.relevance_score,
+                }
+            )
+        pipeline_latency_ms = (time.perf_counter() - pipeline_started) * 1000.0
+        return {
+            "candidates": candidates,
+            "items": reranked,
+            "candidate_search_latency_ms": candidate_search_latency_ms,
+            "rerank_api_latency_ms": response.latency_ms,
+            "rerank_pipeline_latency_ms": pipeline_latency_ms,
+            "request_id": response.request_id,
+            "prompt_tokens": response.prompt_tokens,
+            "total_tokens": response.total_tokens,
+        }
         
     def update(self,query_list, trajectory_list, reward_list, workflow_list, memory_list):  
         # vallina

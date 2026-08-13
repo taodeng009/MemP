@@ -4,6 +4,7 @@ import unittest
 from pathlib import Path
 
 from ProcedureMem.alfworld_experiment import (
+    build_condition_comparison,
     build_paired_comparison,
     build_task_manifest,
     inject_memory,
@@ -11,6 +12,7 @@ from ProcedureMem.alfworld_experiment import (
     load_json,
     manifest_sha256,
     retrieval_records,
+    reranked_retrieval_records,
     summarize_results,
     task_query,
     validate_task_manifest,
@@ -194,6 +196,85 @@ class ResultSummaryTests(unittest.TestCase):
         prompt = inject_memory("Your task is to: cool bread", records)
         self.assertIn("find a fridge", prompt)
         self.assertEqual(task_query("room\nYour task is to: cool bread"), "cool bread")
+
+    def test_reranked_retrieval_keeps_vector_and_rerank_scores_distinct(self):
+        records = reranked_retrieval_records(
+            [
+                {
+                    "document": FakeDocument(
+                        query="cool an apple",
+                        workflow="find a fridge",
+                        source="traj-1",
+                    ),
+                    "vector_rank": 7,
+                    "vector_score": 0.42,
+                    "rerank_rank": 1,
+                    "rerank_score": 0.91,
+                }
+            ]
+        )
+        record = records[0]
+        self.assertEqual(record["vector_rank"], 7)
+        self.assertEqual(record["vector_score_type"], "faiss_l2_distance")
+        self.assertFalse(record["vector_higher_is_better"])
+        self.assertEqual(record["rerank_rank"], 1)
+        self.assertEqual(record["rerank_score_type"], "openmem_relevance_score")
+        self.assertTrue(record["rerank_higher_is_better"])
+        self.assertIn("find a fridge", inject_memory("observation", records))
+
+    def test_memory_rerank_comparison_counts_paired_flips(self):
+        parameters = {
+            "model": "model",
+            "agent_api_base_url": "url",
+            "split": "valid_unseen",
+            "seed": 42,
+            "batch_size": 2,
+            "max_steps": 30,
+            "temperature": 0,
+            "top_p": 1.0,
+            "few_shot": True,
+            "manifest_sha256": "hash",
+        }
+        baseline_summary = {
+            "condition": "memory",
+            "split": "valid_unseen",
+            "task_ids": ["a", "b", "c", "d"],
+            "success_rate": 0.5,
+            "parameters": dict(parameters, top_k=10),
+            "retrieval_summary": {"similarity_search_latency_ms_mean": 20.0},
+        }
+        rerank_summary = {
+            "condition": "memory_rerank",
+            "split": "valid_unseen",
+            "task_ids": ["a", "b", "c", "d"],
+            "success_rate": 0.75,
+            "parameters": dict(parameters, rerank_candidate_k=20, rerank_top_n=10),
+            "rerank_summary": {"rerank_pipeline_latency_ms_mean": 400.0},
+        }
+        baseline_results = [
+            {"task_id": "a", "reward": True},
+            {"task_id": "b", "reward": True},
+            {"task_id": "c", "reward": False},
+            {"task_id": "d", "reward": False},
+        ]
+        rerank_results = [
+            {"task_id": "a", "reward": True},
+            {"task_id": "b", "reward": False},
+            {"task_id": "c", "reward": True},
+            {"task_id": "d", "reward": True},
+        ]
+        comparison = build_condition_comparison(
+            baseline_summary,
+            rerank_summary,
+            baseline_results,
+            rerank_results,
+        )
+        self.assertEqual(comparison["failure_to_success"], 2)
+        self.assertEqual(comparison["success_to_failure"], 1)
+        self.assertEqual(comparison["both_success"], 1)
+        self.assertEqual(comparison["both_failure"], 0)
+        self.assertEqual(comparison["absolute_improvement_percentage_points"], 25)
+        self.assertEqual(comparison["rerank_added_latency_ms_mean"], 380.0)
 
     def test_raw_trajectory_retrieval_is_recorded_and_injected(self):
         records = retrieval_records(

@@ -14,7 +14,7 @@ from typing import Any, Iterable, Sequence
 MANIFEST_SCHEMA_VERSION = 1
 RESULT_SCHEMA_VERSION = 1
 CONDITIONS = ("no_memory", "memory")
-EVAL_CONDITIONS = CONDITIONS + ("edge_raw",)
+EVAL_CONDITIONS = CONDITIONS + ("memory_rerank", "edge_raw")
 SPLIT_NAMES = {
     "valid_seen": "eval_in_distribution",
     "valid_unseen": "eval_out_of_distribution",
@@ -174,6 +174,33 @@ def retrieval_records(items: Sequence[Any]) -> list[dict[str, Any]]:
     return records
 
 
+def reranked_retrieval_records(
+    items: Sequence[dict[str, Any]],
+) -> list[dict[str, Any]]:
+    """Convert structured reranker output without conflating score directions."""
+    records = []
+    for item in items:
+        document = item["document"]
+        metadata = document.metadata
+        records.append(
+            {
+                "rank": int(item["rerank_rank"]),
+                "task_name": metadata.get("query"),
+                "workflow": metadata.get("workflow"),
+                "source": metadata.get("source"),
+                "vector_rank": int(item["vector_rank"]),
+                "vector_score": float(item["vector_score"]),
+                "vector_score_type": "faiss_l2_distance",
+                "vector_higher_is_better": False,
+                "rerank_rank": int(item["rerank_rank"]),
+                "rerank_score": float(item["rerank_score"]),
+                "rerank_score_type": "openmem_relevance_score",
+                "rerank_higher_is_better": True,
+            }
+        )
+    return records
+
+
 def inject_memory(observation: str, records: Sequence[dict[str, Any]]) -> str:
     if not records:
         return observation
@@ -301,6 +328,7 @@ def build_paired_comparison(
     paired_keys = (
         "model",
         "agent_api_base_url",
+        "embedding_model",
         "split",
         "seed",
         "batch_size",
@@ -345,4 +373,113 @@ def maybe_write_paired_comparison(experiment_dir: str | Path) -> dict[str, Any] 
     )
     write_json(root / "comparison.json", comparison)
     _write_csv(root / "comparison.csv", [comparison])
+    return comparison
+
+
+def build_condition_comparison(
+    baseline_summary: dict[str, Any],
+    rerank_summary: dict[str, Any],
+    baseline_results: Sequence[dict[str, Any]],
+    rerank_results: Sequence[dict[str, Any]],
+) -> dict[str, Any]:
+    """Compare workflow-memory baseline and reranked workflow memory."""
+    if baseline_summary.get("task_ids") != rerank_summary.get("task_ids"):
+        raise ValueError("Cannot compare conditions with different task IDs or order")
+    baseline_parameters = baseline_summary.get("parameters", {})
+    rerank_parameters = rerank_summary.get("parameters", {})
+    paired_keys = (
+        "model",
+        "agent_api_base_url",
+        "embedding_model",
+        "split",
+        "seed",
+        "batch_size",
+        "max_steps",
+        "temperature",
+        "top_p",
+        "few_shot",
+        "memory_config",
+        "memory_build_model",
+        "manifest_sha256",
+    )
+    mismatches = [
+        key
+        for key in paired_keys
+        if baseline_parameters.get(key) != rerank_parameters.get(key)
+    ]
+    if mismatches:
+        raise ValueError("Paired experiment parameter mismatch: " + ", ".join(mismatches))
+    baseline_by_id = {item["task_id"]: bool(item["reward"]) for item in baseline_results}
+    rerank_by_id = {item["task_id"]: bool(item["reward"]) for item in rerank_results}
+    if list(baseline_by_id) != list(rerank_by_id):
+        raise ValueError("Cannot compare result files with different task IDs or order")
+
+    failure_to_success = sum(
+        not baseline_by_id[task_id] and rerank_by_id[task_id]
+        for task_id in baseline_by_id
+    )
+    success_to_failure = sum(
+        baseline_by_id[task_id] and not rerank_by_id[task_id]
+        for task_id in baseline_by_id
+    )
+    both_success = sum(
+        baseline_by_id[task_id] and rerank_by_id[task_id]
+        for task_id in baseline_by_id
+    )
+    both_failure = len(baseline_by_id) - failure_to_success - success_to_failure - both_success
+    baseline_sr = float(baseline_summary["success_rate"])
+    rerank_sr = float(rerank_summary["success_rate"])
+    baseline_retrieval = baseline_summary.get("retrieval_summary") or {}
+    rerank_retrieval = rerank_summary.get("rerank_summary") or {}
+    baseline_latency = baseline_retrieval.get("similarity_search_latency_ms_mean")
+    rerank_latency = rerank_retrieval.get("rerank_pipeline_latency_ms_mean")
+    return {
+        "schema_version": RESULT_SCHEMA_VERSION,
+        "baseline_condition": baseline_summary["condition"],
+        "rerank_condition": rerank_summary["condition"],
+        "split": baseline_summary["split"],
+        "task_count": len(baseline_by_id),
+        "baseline_success_rate": baseline_sr,
+        "rerank_success_rate": rerank_sr,
+        "absolute_improvement": rerank_sr - baseline_sr,
+        "absolute_improvement_percentage_points": (rerank_sr - baseline_sr) * 100,
+        "failure_to_success": failure_to_success,
+        "success_to_failure": success_to_failure,
+        "both_success": both_success,
+        "both_failure": both_failure,
+        "baseline_retrieval_latency_ms_mean": baseline_latency,
+        "rerank_pipeline_latency_ms_mean": rerank_latency,
+        "rerank_added_latency_ms_mean": (
+            rerank_latency - baseline_latency
+            if rerank_latency is not None and baseline_latency is not None
+            else None
+        ),
+        "task_ids": list(baseline_by_id),
+    }
+
+
+def maybe_write_memory_rerank_comparison(
+    experiment_dir: str | Path,
+) -> dict[str, Any] | None:
+    root = Path(experiment_dir)
+    required = {
+        "memory_summary": root / "memory" / "summary.json",
+        "rerank_summary": root / "memory_rerank" / "summary.json",
+        "memory_results": root / "memory" / "results.jsonl",
+        "rerank_results": root / "memory_rerank" / "results.jsonl",
+    }
+    if not all(path.is_file() for path in required.values()):
+        return None
+
+    def load_jsonl(path: Path) -> list[dict[str, Any]]:
+        return [json.loads(line) for line in path.read_text(encoding="utf-8").splitlines() if line]
+
+    comparison = build_condition_comparison(
+        load_json(required["memory_summary"]),
+        load_json(required["rerank_summary"]),
+        load_jsonl(required["memory_results"]),
+        load_jsonl(required["rerank_results"]),
+    )
+    write_json(root / "memory_vs_memory_rerank_comparison.json", comparison)
+    _write_csv(root / "memory_vs_memory_rerank_comparison.csv", [comparison])
     return comparison
