@@ -11,6 +11,7 @@ import time
 from pathlib import Path
 from typing import Any, Sequence
 
+from ProcedureMem.benchmark_config import candidate_score_threshold
 from ProcedureMem.benchmark_stats import latency_summary
 from ProcedureMem.reranker import DEFAULT_MODEL, OpenMemReranker
 from ProcedureMem.runtime_config import (
@@ -37,6 +38,14 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--output-dir", type=Path, default=DEFAULT_OUTPUT)
     parser.add_argument("--alfworld-data")
     parser.add_argument("--candidate-k", type=int, default=20)
+    parser.add_argument(
+        "--candidate-score-threshold",
+        type=float,
+        help=(
+            "FAISS L2 threshold for the reranker candidate pool. CLI overrides "
+            "MEMP_RERANK_CANDIDATE_SCORE_THRESHOLD; unset/empty disables it."
+        ),
+    )
     parser.add_argument("--top-n", type=int, default=10)
     parser.add_argument("--warmup-runs", type=int, default=1)
     parser.add_argument("--repeats", type=int, default=3)
@@ -56,6 +65,12 @@ def _validate_args(parser: argparse.ArgumentParser, args: argparse.Namespace) ->
         parser.error("--top-n cannot exceed --candidate-k")
     if args.rerank_model != DEFAULT_MODEL:
         parser.error(f"--rerank-model must be {DEFAULT_MODEL}")
+    try:
+        args.candidate_score_threshold = candidate_score_threshold(
+            args.candidate_score_threshold
+        )
+    except ValueError as exc:
+        parser.error(str(exc))
 
 
 def _load_json(path: Path) -> Any:
@@ -135,9 +150,18 @@ def _candidate_record(
     }
 
 
-def _search(store: Any, query: str, k: int):
+def _search(
+    store: Any,
+    query: str,
+    k: int,
+    *,
+    score_threshold: float | None = 0.5,
+):
     started = time.perf_counter()
-    items = store.similarity_search_with_score(query, k=k, score_threshold=0.5)
+    kwargs = {"k": k}
+    if score_threshold is not None:
+        kwargs["score_threshold"] = score_threshold
+    items = store.similarity_search_with_score(query, **kwargs)
     return items, (time.perf_counter() - started) * 1000.0
 
 
@@ -172,7 +196,12 @@ def run_benchmark(args: argparse.Namespace) -> dict[str, Any]:
 
     # Warm both embedding/FAISS and the persistent HTTP connection. Warmup data is discarded.
     for _ in range(args.warmup_runs):
-        candidates, _ = _search(store, tasks[0]["query"], args.candidate_k)
+        candidates, _ = _search(
+            store,
+            tasks[0]["query"],
+            args.candidate_k,
+            score_threshold=args.candidate_score_threshold,
+        )
         if not candidates:
             raise RuntimeError("FAISS returned no candidates during warmup")
         reranker.rerank(
@@ -194,7 +223,10 @@ def run_benchmark(args: argparse.Namespace) -> dict[str, Any]:
             baseline, similarity_latency = _search(store, task["query"], args.top_n)
             pipeline_started = time.perf_counter()
             candidates, candidate_search_latency = _search(
-                store, task["query"], args.candidate_k
+                store,
+                task["query"],
+                args.candidate_k,
+                score_threshold=args.candidate_score_threshold,
             )
             if not candidates:
                 raise RuntimeError(f"FAISS returned no candidates for {task['task_id']}")
@@ -241,6 +273,7 @@ def run_benchmark(args: argparse.Namespace) -> dict[str, Any]:
                 reranked_ids = [item["memory_id"] for item in reranked_records]
                 overlap = len(set(baseline_ids) & set(reranked_ids))
                 representative = {
+                    "actual_candidate_count": len(candidates),
                     "top1_changed": bool(
                         baseline_ids
                         and reranked_ids
@@ -278,6 +311,14 @@ def run_benchmark(args: argparse.Namespace) -> dict[str, Any]:
         "embedding_model": settings.embedding_model,
         "rerank_model": args.rerank_model,
         "candidate_k": args.candidate_k,
+        "candidate_score_threshold": args.candidate_score_threshold,
+        "candidate_count": {
+            "mean": statistics.fmean(
+                item["actual_candidate_count"] for item in task_results
+            ),
+            "min": min(item["actual_candidate_count"] for item in task_results),
+            "max": max(item["actual_candidate_count"] for item in task_results),
+        },
         "top_n": args.top_n,
         "warmup_runs": args.warmup_runs,
         "repeats": args.repeats,

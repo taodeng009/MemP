@@ -31,6 +31,8 @@ MEMOS_API_KEY=
 MEMOS_BASE_URL=https://memos.memtensor.cn/api/openmem/v1
 MEMOS_RERANK_MODEL=memos-reranker-4b
 MEMOS_RERANK_TIMEOUT=30
+# Reranker 候选池的 FAISS L2 threshold；留空表示不设 threshold。
+MEMP_RERANK_CANDIDATE_SCORE_THRESHOLD=
 ```
 
 真实 API key 不写入代码、配置文件或实验结果。
@@ -86,7 +88,7 @@ P0 默认采用 fail-fast：API 超时、非 2xx 或非法响应直接记录为 
 
 在 `ProcedureMem/memory.py` 中保留现有 `retrieve()`，新增 rerank 检索路径：
 
-1. FAISS 召回 `candidate_k` 条 workflow memory；
+1. FAISS 按 `candidate_k` 和可选的 reranker 候选池 threshold 召回 workflow memory；
 2. 将每条候选格式化为包含历史任务和 workflow 的文本；
 3. 调用 OpenMem reranker；
 4. 根据返回的原始 `index` 映射回 LangChain `Document`；
@@ -115,8 +117,11 @@ memory_rerank
 - `--rerank-candidate-k`，默认 20
 - `--rerank-top-n`，默认 10
 - `--rerank-timeout`，默认 30 秒
+- `--candidate-score-threshold`，覆盖 `.env` 中的 `MEMP_RERANK_CANDIDATE_SCORE_THRESHOLD`
 
 `candidate_k` 表示 FAISS 候选数，`top_n` 表示最终注入数量，两者不得继续共用一个 `top-k` 含义。`inject_memory()` 的 prompt 格式保持不变。
+
+该 threshold 只控制 reranker 的 FAISS 候选池，不改变 baseline similarity search 的历史 `score_threshold=0.5`。环境变量留空时不设置候选池 threshold，从而尽量实际召回完整的 `candidate_k`。
 
 ## 5. 结果与成本记录
 

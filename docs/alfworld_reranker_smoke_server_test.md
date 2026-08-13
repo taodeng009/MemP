@@ -36,6 +36,9 @@ MEMOS_API_KEY=<openmem-api-key>
 MEMOS_BASE_URL=https://memos.memtensor.cn/api/openmem/v1
 MEMOS_RERANK_MODEL=memos-reranker-4b
 MEMOS_RERANK_TIMEOUT=30
+
+# Reranker 候选池的 FAISS L2 threshold；留空表示不设 threshold。
+MEMP_RERANK_CANDIDATE_SCORE_THRESHOLD=
 ```
 
 `ALFWORLD_DATA` 中需要包含 manifest 对应的 `traj_data.json`，benchmark 会从中读取真实 task goal。不要把 `MEMOS_API_KEY` 提交到 Git 或复制进结果文件。
@@ -60,6 +63,7 @@ bash scripts/run_alfworld_reranker_smoke.sh
 - 10-task manifest；
 - `memos-reranker-4b`；
 - FAISS `candidate_k=20`；
+- reranker 候选池默认不设置 score threshold，尽量实际召回 20 条；
 - reranker `top_n=10`；
 - 预热 1 次；
 - 每个 task 正式重复 3 次；
@@ -84,6 +88,7 @@ ProcedureMem/Alfworld/results/reranker_smoke/valid_unseen_seed42_n10/
 
 - `task_count` 等于 10；
 - `rerank_model` 等于 `memos-reranker-4b`；
+- `candidate_score_threshold` 为 `null`，且 `candidate_count` 的最小值和最大值均为 20；
 - `top1_changed_count` 或 Top-N overlap 表明排序确实发生变化；
 - `latency.similarity`、`latency.rerank_api`、`latency.rerank_pipeline` 和 `latency.rerank_added` 均有合法统计值；
 - 运行过程中无超时、非 2xx 或非法响应。
