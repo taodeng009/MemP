@@ -71,6 +71,15 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--rerank-model", default=DEFAULT_MODEL)
     parser.add_argument("--rerank-timeout", type=float)
     parser.add_argument("--candidate-score-threshold", type=float)
+    parser.add_argument(
+        "--measure-baseline-retrieval-latency",
+        action=argparse.BooleanOptionalAction,
+        default=False,
+        help=(
+            "For memory_rerank only, run one extra baseline similarity search per "
+            "task for latency comparison. Disabled by default."
+        ),
+    )
     parser.add_argument("--model")
     parser.add_argument("--memory-build-model")
     parser.add_argument("--memory-config", default=str(DEFAULT_MEMORY_CONFIG))
@@ -126,6 +135,14 @@ def _validate_args(parser: argparse.ArgumentParser, args: argparse.Namespace) ->
     elif args.candidate_score_threshold is not None:
         parser.error(
             "--candidate-score-threshold is only valid for --condition memory_rerank"
+        )
+    if (
+        args.measure_baseline_retrieval_latency
+        and args.condition != "memory_rerank"
+    ):
+        parser.error(
+            "--measure-baseline-retrieval-latency is only valid for "
+            "--condition memory_rerank"
         )
 
 
@@ -361,6 +378,11 @@ def main(argv: Sequence[str] | None = None) -> int:
         "rerank_base_url": (
             reranker.base_url if args.condition == "memory_rerank" else None
         ),
+        "measure_baseline_retrieval_latency": (
+            args.measure_baseline_retrieval_latency
+            if args.condition == "memory_rerank"
+            else False
+        ),
         "edge_capacity": args.edge_capacity,
         "edge_subset_manifest": (
             str(args.edge_subset_manifest.resolve())
@@ -413,6 +435,13 @@ def main(argv: Sequence[str] | None = None) -> int:
                 for index, observation in enumerate(observations):
                     query = task_query(observation)
                     if args.condition == "memory_rerank":
+                        baseline_similarity_latency_ms = None
+                        if args.measure_baseline_retrieval_latency:
+                            baseline_retrieval_started = time.perf_counter()
+                            memory.retrieve(query)
+                            baseline_similarity_latency_ms = (
+                                time.perf_counter() - baseline_retrieval_started
+                            ) * 1000.0
                         rerank_output = memory.retrieve_with_rerank(
                             query,
                             reranker=reranker,
@@ -431,6 +460,9 @@ def main(argv: Sequence[str] | None = None) -> int:
                         overlap = len(set(vector_ids) & set(rerank_ids))
                         rerank_by_task[index] = {
                             "actual_candidate_count": len(rerank_output["candidates"]),
+                            "baseline_similarity_search_latency_ms": (
+                                baseline_similarity_latency_ms
+                            ),
                             "candidate_search_latency_ms": rerank_output[
                                 "candidate_search_latency_ms"
                             ],
@@ -541,6 +573,15 @@ def main(argv: Sequence[str] | None = None) -> int:
             "candidate_search_latency_ms_mean": statistics.fmean(
                 row["candidate_search_latency_ms"] for row in rerank_rows
             ),
+            "baseline_similarity_search_latency_ms_mean": statistics.fmean(
+                row["baseline_similarity_search_latency_ms"] for row in rerank_rows
+                if row["baseline_similarity_search_latency_ms"] is not None
+            )
+            if any(
+                row["baseline_similarity_search_latency_ms"] is not None
+                for row in rerank_rows
+            )
+            else None,
             "rerank_api_latency_ms_mean": statistics.fmean(
                 row["rerank_api_latency_ms"] for row in rerank_rows
             ),

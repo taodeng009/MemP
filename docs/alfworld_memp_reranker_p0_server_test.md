@@ -54,13 +54,19 @@ python -m unittest \
   tests.test_runtime_config
 ```
 
-再运行 50-task P0：
+确认已有 baseline 位于：
+
+```text
+ProcedureMem/Alfworld/results/paired/valid_unseen_seed42_n50/memory/
+```
+
+再运行 50-task reranker 条件：
 
 ```bash
 bash scripts/run_alfworld_memp_reranker_p0.sh
 ```
 
-脚本会先运行 `memory` baseline，再运行 `memory_rerank`。两个条件使用同一份：
+脚本只运行 `memory_rerank`，不会重新运行或覆盖现有 `memory` baseline。P0 脚本显式传入 `--measure-baseline-retrieval-latency`，因此每个任务会额外计时一次原 Top-10 similarity search；该结果不注入 Agent，仅用于与 reranker pipeline 比较时延。这个开关默认关闭，以后普通 `memory_rerank` 运行不会产生额外检索。两个条件使用同一份：
 
 ```text
 ProcedureMem/Alfworld/manifests/valid_unseen_seed42_n50.json
@@ -73,7 +79,7 @@ ProcedureMem/Alfworld/manifests/valid_unseen_seed42_n50.json
 结果目录：
 
 ```text
-ProcedureMem/Alfworld/results/paired/valid_unseen_seed42_n50_memp_reranker_p0/
+ProcedureMem/Alfworld/results/paired/valid_unseen_seed42_n50/
 ```
 
 主要文件：

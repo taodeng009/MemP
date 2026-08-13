@@ -432,6 +432,10 @@ def build_condition_comparison(
     baseline_retrieval = baseline_summary.get("retrieval_summary") or {}
     rerank_retrieval = rerank_summary.get("rerank_summary") or {}
     baseline_latency = baseline_retrieval.get("similarity_search_latency_ms_mean")
+    if baseline_latency is None:
+        baseline_latency = rerank_retrieval.get(
+            "baseline_similarity_search_latency_ms_mean"
+        )
     rerank_latency = rerank_retrieval.get("rerank_pipeline_latency_ms_mean")
     return {
         "schema_version": RESULT_SCHEMA_VERSION,
