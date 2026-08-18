@@ -25,6 +25,7 @@ from ProcedureMem.alfworld_experiment import (
     manifest_sha256,
     maybe_write_paired_comparison,
     maybe_write_memory_rerank_comparison,
+    maybe_write_scheduling_comparison,
     reranked_retrieval_records,
     retrieval_records,
     task_id_from_gamefile,
@@ -32,6 +33,15 @@ from ProcedureMem.alfworld_experiment import (
     validate_task_manifest,
     write_json,
     write_results,
+)
+from ProcedureMem.cloud_scheduling import (
+    OracleHighScheduler,
+    RandomScheduler,
+    ScheduledWorkflowMemory,
+    build_interval_batches,
+    candidate_pool_sha256,
+    load_candidate_memories,
+    summarize_scheduling_intervals,
 )
 from ProcedureMem.runtime_config import (
     DEFAULT_ALFWORLD_CONFIG,
@@ -89,6 +99,11 @@ def build_parser() -> argparse.ArgumentParser:
     )
     parser.add_argument("--edge-memory-dir", type=Path)
     parser.add_argument("--trajectory-file", type=Path, default=DEFAULT_TRAJECTORY_PATH)
+    parser.add_argument("--schedule-policy", choices=("random", "oracle_high"))
+    parser.add_argument("--interval-size", type=int)
+    parser.add_argument("--construction-capacity", type=int)
+    parser.add_argument("--scheduler-seed", type=int, default=42)
+    parser.add_argument("--candidate-memory-file", type=Path)
     parser.add_argument("--alfworld-data")
     parser.add_argument("--config", default=str(DEFAULT_ALFWORLD_CONFIG))
     parser.add_argument("--experiment-name", default="alfworld_paired")
@@ -117,6 +132,25 @@ def _validate_args(parser: argparse.ArgumentParser, args: argparse.Namespace) ->
         parser.error("--edge-capacity is only valid for --condition edge_raw")
     if args.condition != "edge_raw" and args.score_threshold is not None:
         parser.error("--score-threshold is only valid for --condition edge_raw")
+    scheduling_args = (
+        args.schedule_policy,
+        args.interval_size,
+        args.construction_capacity,
+        args.candidate_memory_file,
+    )
+    if args.condition == "cloud_scheduled":
+        if args.schedule_policy is None:
+            parser.error("--schedule-policy is required for cloud_scheduled")
+        if args.interval_size is None or args.interval_size < 1:
+            parser.error("--interval-size must be at least 1 for cloud_scheduled")
+        if args.construction_capacity is None or args.construction_capacity < 1:
+            parser.error(
+                "--construction-capacity must be at least 1 for cloud_scheduled"
+            )
+    elif any(value is not None for value in scheduling_args):
+        parser.error(
+            "Scheduling arguments are only valid for --condition cloud_scheduled"
+        )
     if args.condition == "memory_rerank":
         if args.rerank_candidate_k < 1 or args.rerank_top_n < 1:
             parser.error("rerank candidate-k and top-n must be at least 1")
@@ -194,6 +228,40 @@ def _load_memory(args: argparse.Namespace):
     return Memory(**config)
 
 
+def _load_scheduled_memory(args: argparse.Namespace):
+    from langchain.embeddings import CacheBackedEmbeddings
+    from langchain.storage import LocalFileStore
+
+    from ProcedureMem.llm_api import get_embedding_model
+
+    config = load_memory_config(args.memory_config)
+    build_policy = config.get("policy", {}).get("build", "direct")
+    candidate_path = args.candidate_memory_file or (
+        Path(config["memory_dir"]) / build_policy / "documents.json"
+    )
+    candidates = load_candidate_memories(candidate_path, limit=300)
+    embedding = get_embedding_model()
+    cache_dir = Path(config["memory_dir"]) / "vector_cache"
+    cache_dir.mkdir(parents=True, exist_ok=True)
+    embedding_namespace = (
+        getattr(embedding, "model", None) or embedding.__class__.__name__
+    )
+    cached_embedding = CacheBackedEmbeddings.from_bytes_store(
+        embedding,
+        LocalFileStore(str(cache_dir)),
+        namespace=str(embedding_namespace),
+    )
+    memory = ScheduledWorkflowMemory(
+        candidates,
+        embedding=cached_embedding,
+        retrieve_num=args.top_k,
+        score_threshold=0.5,
+    )
+    return memory, Path(candidate_path).expanduser().resolve(), candidate_pool_sha256(
+        candidates
+    )
+
+
 def _memory_identity(record: dict[str, Any]) -> str:
     payload = f"{record.get('task_name')}\0{record.get('workflow')}"
     return hashlib.sha256(payload.encode("utf-8")).hexdigest()
@@ -232,6 +300,36 @@ def _prepare_output(directory: Path, overwrite: bool) -> None:
             )
         shutil.rmtree(directory)
     directory.mkdir(parents=True, exist_ok=True)
+
+
+def _freeze_task_queries(
+    task_ids: Sequence[str],
+    *,
+    data_root: Path,
+) -> tuple[str, ...]:
+    """Read frozen task descriptions without resetting the ALFWorld environment."""
+    queries: list[str] = []
+    for task_id in task_ids:
+        trajectory_path = (data_root / Path(task_id)).parent / "traj_data.json"
+        if not trajectory_path.is_file():
+            raise FileNotFoundError(
+                f"Cannot freeze query for {task_id}: missing {trajectory_path}"
+            )
+        trajectory = load_json(trajectory_path)
+        annotations = trajectory.get("turk_annotations", {}).get("anns", [])
+        query = next(
+            (
+                annotation["task_desc"].strip()
+                for annotation in annotations
+                if isinstance(annotation.get("task_desc"), str)
+                and annotation["task_desc"].strip()
+            ),
+            None,
+        )
+        if query is None:
+            raise ValueError(f"No task_desc found in {trajectory_path}")
+        queries.append(query)
+    return tuple(queries)
 
 
 def main(argv: Sequence[str] | None = None) -> int:
@@ -289,13 +387,22 @@ def main(argv: Sequence[str] | None = None) -> int:
         model_name=args.model,
         alfworld_data=args.alfworld_data,
         require_llm=True,
-        require_embedding=args.condition in {"memory", "memory_rerank", "edge_raw"},
+        require_embedding=args.condition
+        in {"memory", "memory_rerank", "edge_raw", "cloud_scheduled"},
     )
     llm, routed_model = _make_llm(settings.model_name, args.temperature, manifest["seed"])
+    candidate_memory_path = None
+    scheduled_candidate_pool_sha256 = None
     if args.condition in {"memory", "memory_rerank"}:
         memory = _load_memory(args)
     elif args.condition == "edge_raw":
         memory = _load_edge_memory(args)
+    elif args.condition == "cloud_scheduled":
+        (
+            memory,
+            candidate_memory_path,
+            scheduled_candidate_pool_sha256,
+        ) = _load_scheduled_memory(args)
     else:
         memory = None
     reranker = (
@@ -304,11 +411,16 @@ def main(argv: Sequence[str] | None = None) -> int:
         else None
     )
 
-    condition_name = args.condition_name or (
-        f"edge_raw_{args.edge_capacity}"
-        if args.condition == "edge_raw"
-        else args.condition
-    )
+    if args.condition_name:
+        condition_name = args.condition_name
+    elif args.condition == "edge_raw":
+        condition_name = f"edge_raw_{args.edge_capacity}"
+    elif args.condition == "cloud_scheduled" and args.schedule_policy == "random":
+        condition_name = f"cloud_scheduled_random_seed{args.scheduler_seed}"
+    elif args.condition == "cloud_scheduled":
+        condition_name = "cloud_scheduled_oracle_high"
+    else:
+        condition_name = args.condition
 
     experiment_dir = (
         args.output_dir.resolve()
@@ -317,6 +429,21 @@ def main(argv: Sequence[str] | None = None) -> int:
     )
     condition_dir = experiment_dir / condition_name
     _prepare_output(condition_dir, args.overwrite)
+
+    frozen_task_queries: tuple[str, ...] | None = None
+    scheduler = None
+    if args.condition == "cloud_scheduled":
+        if args.schedule_policy == "random":
+            scheduler = RandomScheduler(
+                memory.candidate_order,
+                seed=args.scheduler_seed,
+            )
+        else:
+            frozen_task_queries = _freeze_task_queries(
+                [task["task_id"] for task in manifest["tasks"]],
+                data_root=settings.alfworld_data,
+            )
+            scheduler = OracleHighScheduler()
 
     parameters = {
         "model": settings.model_name,
@@ -340,14 +467,14 @@ def main(argv: Sequence[str] | None = None) -> int:
             "raw_trajectory"
             if args.condition == "edge_raw"
             else "workflow"
-            if args.condition in {"memory", "memory_rerank"}
+            if args.condition in {"memory", "memory_rerank", "cloud_scheduled"}
             else None
         ),
         "retrieval_pipeline": (
             "faiss_then_openmem_rerank"
             if args.condition == "memory_rerank"
             else "faiss_similarity"
-            if args.condition == "memory"
+            if args.condition in {"memory", "cloud_scheduled"}
             else None
         ),
         "memory_config": (
@@ -394,13 +521,68 @@ def main(argv: Sequence[str] | None = None) -> int:
         ),
         "manifest": str(manifest_path.resolve()),
         "manifest_sha256": manifest_sha256(manifest),
+        "schedule_policy": args.schedule_policy,
+        "interval_size": args.interval_size,
+        "construction_capacity": args.construction_capacity,
+        "scheduler_seed": (
+            args.scheduler_seed
+            if args.condition == "cloud_scheduled" and args.schedule_policy == "random"
+            else None
+        ),
+        "candidate_memory_file": (
+            str(candidate_memory_path) if candidate_memory_path else None
+        ),
+        "candidate_pool_sha256": scheduled_candidate_pool_sha256,
+        "candidate_memory_count": (
+            len(memory.candidates) if args.condition == "cloud_scheduled" else None
+        ),
+        "scheduled_score_threshold": (
+            memory.score_threshold if args.condition == "cloud_scheduled" else None
+        ),
+        "oracle_score_type": (
+            "faiss_l2_distance_sum"
+            if args.condition == "cloud_scheduled"
+            and args.schedule_policy == "oracle_high"
+            else None
+        ),
+        "oracle_higher_is_better": (
+            False
+            if args.condition == "cloud_scheduled"
+            and args.schedule_policy == "oracle_high"
+            else None
+        ),
     }
     write_json(condition_dir / "experiment.json", parameters)
     examples = json.loads(DEFAULT_EXAMPLES_PATH.read_text(encoding="utf-8"))
 
     results: list[dict[str, Any]] = []
-    for offset in range(0, len(selected_gamefiles), args.batch_size):
-        chunk = selected_gamefiles[offset : offset + args.batch_size]
+    if args.condition == "cloud_scheduled":
+        batch_specs = build_interval_batches(
+            len(selected_gamefiles),
+            batch_size=args.batch_size,
+            interval_size=args.interval_size,
+        )
+    else:
+        batch_specs = [
+            (
+                offset,
+                min(offset + args.batch_size, len(selected_gamefiles)),
+                None,
+                False,
+                False,
+            )
+            for offset in range(0, len(selected_gamefiles), args.batch_size)
+        ]
+
+    selected_by_interval: dict[int, list[str]] = {0: []}
+    oracle_distances_by_interval: dict[int, dict[str, float] | None] = {0: None}
+    interval_available_count = 0
+
+    for offset, batch_end, interval_id, interval_start, interval_end in batch_specs:
+        if args.condition == "cloud_scheduled" and interval_start:
+            memory.rebuild_available_index()
+            interval_available_count = len(memory.available_ids)
+        chunk = selected_gamefiles[offset:batch_end]
         expected_ids = [
             task["task_id"] for task in manifest["tasks"][offset : offset + len(chunk)]
         ]
@@ -547,9 +729,72 @@ def main(argv: Sequence[str] | None = None) -> int:
                 result_fields["rerank"] = rerank_record
             if retrieval_record is not None:
                 result_fields["retrieval"] = retrieval_record
+            if args.condition == "cloud_scheduled":
+                retrieved_memory_ids = [
+                    record["memory_id"]
+                    for record in retrieved_records
+                    if record.get("memory_id") is not None
+                ]
+                result_fields.update(
+                    {
+                        "interval_id": interval_id,
+                        "policy": args.schedule_policy,
+                        "selected_memory_ids": selected_by_interval[interval_id],
+                        "available_memory_count": interval_available_count,
+                        "retrieved_memory_ids": retrieved_memory_ids,
+                        "retrieval_scores": [
+                            record.get("score") for record in retrieved_records
+                        ],
+                        "oracle_scores": (
+                            {
+                                memory_id: {
+                                    "value": distance,
+                                    "score_type": "faiss_l2_distance_sum",
+                                    "higher_is_better": False,
+                                }
+                                for memory_id, distance in (
+                                    oracle_distances_by_interval[interval_id] or {}
+                                ).items()
+                            }
+                            if args.schedule_policy == "oracle_high"
+                            else None
+                        ),
+                    }
+                )
             result.update(result_fields)
             results.append(result)
         print(f"Completed {len(results)}/{len(selected_gamefiles)} tasks")
+
+        if (
+            args.condition == "cloud_scheduled"
+            and interval_end
+            and batch_end < len(selected_gamefiles)
+        ):
+            next_interval_id = interval_id + 1
+            if args.schedule_policy == "random":
+                selection = scheduler.select(
+                    memory.pending_ids,
+                    args.construction_capacity,
+                )
+            else:
+                next_interval_end = min(
+                    batch_end + args.interval_size,
+                    len(selected_gamefiles),
+                )
+                selection = scheduler.select(
+                    memory.pending_ids,
+                    args.construction_capacity,
+                    next_interval_queries=frozen_task_queries[
+                        batch_end:next_interval_end
+                    ],
+                    distance_scorer=memory.oracle_distance_sums,
+                )
+            selected_ids = list(selection.memory_ids)
+            memory.activate(selected_ids, interval_id=next_interval_id)
+            selected_by_interval[next_interval_id] = selected_ids
+            oracle_distances_by_interval[next_interval_id] = (
+                selection.oracle_distances
+            )
 
     rerank_metadata = None
     if args.condition == "memory_rerank":
@@ -597,6 +842,14 @@ def main(argv: Sequence[str] | None = None) -> int:
                 for result in results
             )
         }
+    scheduling_metadata = None
+    if args.condition == "cloud_scheduled":
+        scheduling_metadata = {
+            "policy": args.schedule_policy,
+            "interval_size": args.interval_size,
+            "construction_capacity": args.construction_capacity,
+            "intervals": summarize_scheduling_intervals(results),
+        }
     summary = write_results(
         condition_dir,
         results,
@@ -606,6 +859,7 @@ def main(argv: Sequence[str] | None = None) -> int:
             "parameters": parameters,
             "rerank_summary": rerank_metadata,
             "retrieval_summary": retrieval_metadata,
+            "scheduling_summary": scheduling_metadata,
         },
     )
     print(
@@ -626,6 +880,14 @@ def main(argv: Sequence[str] | None = None) -> int:
             "percentage points; "
             f"flips +{rerank_comparison['failure_to_success']} "
             f"/-{rerank_comparison['success_to_failure']}"
+        )
+    scheduling_comparison = maybe_write_scheduling_comparison(experiment_dir)
+    if scheduling_comparison:
+        print(
+            "Oracle-High vs Random mean: "
+            f"{scheduling_comparison['oracle_minus_random_success_rate_percentage_points']:+.2f} "
+            "percentage points; average-steps delta "
+            f"{scheduling_comparison['oracle_minus_random_average_steps']:+.2f}"
         )
     return 0
 

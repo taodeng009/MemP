@@ -6,6 +6,7 @@ import csv
 import hashlib
 import json
 import random
+import statistics
 from collections import Counter
 from pathlib import Path
 from typing import Any, Iterable, Sequence
@@ -14,7 +15,7 @@ from typing import Any, Iterable, Sequence
 MANIFEST_SCHEMA_VERSION = 1
 RESULT_SCHEMA_VERSION = 1
 CONDITIONS = ("no_memory", "memory")
-EVAL_CONDITIONS = CONDITIONS + ("memory_rerank", "edge_raw")
+EVAL_CONDITIONS = CONDITIONS + ("memory_rerank", "edge_raw", "cloud_scheduled")
 SPLIT_NAMES = {
     "valid_seen": "eval_in_distribution",
     "valid_unseen": "eval_out_of_distribution",
@@ -152,9 +153,11 @@ def retrieval_records(items: Sequence[Any]) -> list[dict[str, Any]]:
         metadata = document.metadata
         record = {
             "rank": rank,
+            "memory_id": metadata.get("memory_id"),
             "task_name": metadata.get("query"),
             "score": float(score) if score is not None else None,
             "source": metadata.get("source"),
+            "activated_interval": metadata.get("activated_interval"),
         }
         if metadata.get("memory_type") == "raw_trajectory" or "trajectory" in metadata:
             record.update(
@@ -170,6 +173,8 @@ def retrieval_records(items: Sequence[Any]) -> list[dict[str, Any]]:
             )
         else:
             record["workflow"] = metadata.get("workflow")
+            if metadata.get("trajectory_index") is not None:
+                record["trajectory_index"] = metadata.get("trajectory_index")
         records.append(record)
     return records
 
@@ -486,4 +491,107 @@ def maybe_write_memory_rerank_comparison(
     )
     write_json(root / "memory_vs_memory_rerank_comparison.json", comparison)
     _write_csv(root / "memory_vs_memory_rerank_comparison.csv", [comparison])
+    return comparison
+
+
+def maybe_write_scheduling_comparison(
+    experiment_dir: str | Path,
+) -> dict[str, Any] | None:
+    """Write the minimal Random versus Oracle-High feasibility comparison."""
+    root = Path(experiment_dir)
+    summaries = []
+    if not root.is_dir():
+        return None
+    for path in sorted(root.glob("*/summary.json")):
+        summary = load_json(path)
+        parameters = summary.get("parameters") or {}
+        if parameters.get("condition_mode") == "cloud_scheduled":
+            summaries.append(summary)
+
+    random_summaries = [
+        item for item in summaries
+        if item.get("parameters", {}).get("schedule_policy") == "random"
+    ]
+    oracle_summaries = [
+        item for item in summaries
+        if item.get("parameters", {}).get("schedule_policy") == "oracle_high"
+    ]
+    if not random_summaries or not oracle_summaries:
+        return None
+    if len(oracle_summaries) != 1:
+        raise ValueError(
+            "Scheduling comparison requires exactly one Oracle-High summary"
+        )
+
+    reference = random_summaries[0]
+    reference_parameters = reference["parameters"]
+    controlled_keys = (
+        "model",
+        "agent_api_base_url",
+        "embedding_model",
+        "split",
+        "seed",
+        "batch_size",
+        "max_steps",
+        "temperature",
+        "top_p",
+        "few_shot",
+        "top_k",
+        "manifest_sha256",
+        "candidate_pool_sha256",
+        "interval_size",
+        "construction_capacity",
+        "scheduled_score_threshold",
+    )
+    for summary in random_summaries[1:] + oracle_summaries:
+        if summary.get("task_ids") != reference.get("task_ids"):
+            raise ValueError(
+                "Scheduling conditions use different task IDs or task order"
+            )
+        parameters = summary.get("parameters") or {}
+        mismatches = [
+            key
+            for key in controlled_keys
+            if parameters.get(key) != reference_parameters.get(key)
+        ]
+        if mismatches:
+            raise ValueError(
+                "Scheduling experiment parameter mismatch: " + ", ".join(mismatches)
+            )
+
+    random_success_rates = [float(item["success_rate"]) for item in random_summaries]
+    random_steps = [float(item["average_steps"]) for item in random_summaries]
+    random_sr_mean = statistics.fmean(random_success_rates)
+    random_steps_mean = statistics.fmean(random_steps)
+    oracle = oracle_summaries[0]
+    oracle_sr = float(oracle["success_rate"])
+    oracle_steps = float(oracle["average_steps"])
+    comparison = {
+        "schema_version": RESULT_SCHEMA_VERSION,
+        "experiment_type": "construction_scheduling_feasibility",
+        "random_run_count": len(random_summaries),
+        "random_runs": [
+            {
+                "condition": item["condition"],
+                "scheduler_seed": item["parameters"].get("scheduler_seed"),
+                "success_rate": item["success_rate"],
+                "average_steps": item["average_steps"],
+            }
+            for item in random_summaries
+        ],
+        "random_success_rate_mean": random_sr_mean,
+        "random_success_rate_std": statistics.pstdev(random_success_rates),
+        "random_average_steps_mean": random_steps_mean,
+        "random_average_steps_std": statistics.pstdev(random_steps),
+        "oracle_condition": oracle["condition"],
+        "oracle_success_rate": oracle_sr,
+        "oracle_average_steps": oracle_steps,
+        "oracle_minus_random_success_rate": oracle_sr - random_sr_mean,
+        "oracle_minus_random_success_rate_percentage_points": (
+            oracle_sr - random_sr_mean
+        ) * 100,
+        "oracle_minus_random_average_steps": oracle_steps - random_steps_mean,
+    }
+    write_json(root / "scheduling_comparison.json", comparison)
+    _write_csv(root / "scheduling_comparison.csv", [comparison])
     return comparison
