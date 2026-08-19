@@ -25,6 +25,7 @@ class CandidateMemory:
 class ScheduleSelection:
     memory_ids: tuple[str, ...]
     oracle_distances: dict[str, float] | None = None
+    oracle_scores: dict[str, dict[str, Any]] | None = None
 
 
 def load_candidate_memories(
@@ -218,12 +219,27 @@ class ScheduledWorkflowMemory:
         pending_ids: Iterable[str],
     ) -> dict[str, float]:
         """Return summed squared-L2 distances; lower values are better."""
+        distance_matrix = self.oracle_distance_matrix(
+            next_interval_queries,
+            pending_ids,
+        )
+        return {
+            memory_id: float(np.sum(np.asarray(distances, dtype=np.float32)))
+            for memory_id, distances in distance_matrix.items()
+        }
+
+    def oracle_distance_matrix(
+        self,
+        next_interval_queries: Sequence[str],
+        memory_ids: Iterable[str],
+    ) -> dict[str, tuple[float, ...]]:
+        """Return per-query squared-L2 distances in query input order."""
         queries = [query for query in next_interval_queries if query.strip()]
         if not queries:
-            raise ValueError("Oracle-High requires next-interval task queries")
-        pending = set(pending_ids)
+            raise ValueError("Oracle scheduling requires next-interval task queries")
+        requested = set(memory_ids)
         ordered_ids = [
-            memory_id for memory_id in self.candidate_order if memory_id in pending
+            memory_id for memory_id in self.candidate_order if memory_id in requested
         ]
         if not ordered_ids:
             return {}
@@ -247,11 +263,13 @@ class ScheduledWorkflowMemory:
             [self.embedding.embed_query(query) for query in queries],
             dtype=np.float32,
         )
-        distances: dict[str, float] = {}
+        distances: dict[str, tuple[float, ...]] = {}
         for memory_id in ordered_ids:
             candidate_vector = self._candidate_embeddings[memory_id]
             delta = query_vectors - candidate_vector
-            distances[memory_id] = float(np.sum(delta * delta))
+            distances[memory_id] = tuple(
+                float(value) for value in np.sum(delta * delta, axis=1)
+            )
         return distances
 
 
@@ -271,6 +289,8 @@ class RandomScheduler:
 
 
 class OracleHighScheduler:
+    """Legacy sum-distance Oracle, retained for backward compatibility."""
+
     def select(
         self,
         pending_ids: Iterable[str],
@@ -305,6 +325,127 @@ class OracleHighScheduler:
         return ScheduleSelection(
             memory_ids=selected,
             oracle_distances={memory_id: distances[memory_id] for memory_id in selected},
+        )
+
+
+OracleSumScheduler = OracleHighScheduler
+
+
+class OracleCoverageScheduler:
+    """Greedily maximize marginal distance improvement over available memory."""
+
+    def select(
+        self,
+        pending_ids: Iterable[str],
+        capacity: int,
+        *,
+        available_ids: Iterable[str],
+        next_interval_queries: Sequence[str],
+        distance_scorer: Callable[
+            [Sequence[str], Iterable[str]],
+            Mapping[str, Sequence[float]],
+        ],
+    ) -> ScheduleSelection:
+        if capacity < 1:
+            raise ValueError("Construction capacity must be at least 1")
+        pending = set(pending_ids)
+        if not pending:
+            return ScheduleSelection(memory_ids=(), oracle_scores={})
+        available = set(available_ids)
+        overlap = pending & available
+        if overlap:
+            raise ValueError(
+                "Available and pending memory IDs overlap: "
+                + ", ".join(sorted(overlap)[:5])
+            )
+
+        scored_ids = pending | available
+        distance_matrix = {
+            memory_id: tuple(float(value) for value in values)
+            for memory_id, values in distance_scorer(
+                next_interval_queries,
+                scored_ids,
+            ).items()
+        }
+        if set(distance_matrix) != scored_ids:
+            missing = sorted(scored_ids - set(distance_matrix))
+            unknown = sorted(set(distance_matrix) - scored_ids)
+            raise ValueError(
+                "Oracle distance scorer returned the wrong memories: "
+                f"missing={missing[:5]}, unknown={unknown[:5]}"
+            )
+        query_count = len([query for query in next_interval_queries if query.strip()])
+        wrong_lengths = sorted(
+            memory_id
+            for memory_id, distances in distance_matrix.items()
+            if len(distances) != query_count
+        )
+        if wrong_lengths:
+            raise ValueError(
+                "Oracle distance scorer returned the wrong query count for: "
+                + ", ".join(wrong_lengths[:5])
+            )
+
+        selected: list[str] = []
+        scores: dict[str, dict[str, Any]] = {}
+        if available:
+            best_distances = [
+                min(distance_matrix[memory_id][query_index] for memory_id in available)
+                for query_index in range(query_count)
+            ]
+        else:
+            first_id = min(
+                pending,
+                key=lambda memory_id: (
+                    sum(distance_matrix[memory_id]),
+                    memory_id,
+                ),
+            )
+            selected.append(first_id)
+            first_distance_sum = float(sum(distance_matrix[first_id]))
+            scores[first_id] = {
+                "value": first_distance_sum,
+                "score_type": "faiss_l2_distance_sum",
+                "higher_is_better": False,
+                "selection_rank": 1,
+            }
+            best_distances = list(distance_matrix[first_id])
+
+        target_count = min(capacity, len(pending))
+        while len(selected) < target_count:
+            remaining = pending - set(selected)
+            marginal_gains = {
+                memory_id: float(
+                    sum(
+                        max(
+                            0.0,
+                            best_distances[query_index]
+                            - distance_matrix[memory_id][query_index],
+                        )
+                        for query_index in range(query_count)
+                    )
+                )
+                for memory_id in remaining
+            }
+            next_id = min(
+                remaining,
+                key=lambda memory_id: (-marginal_gains[memory_id], memory_id),
+            )
+            selected.append(next_id)
+            scores[next_id] = {
+                "value": marginal_gains[next_id],
+                "score_type": "faiss_l2_marginal_gain",
+                "higher_is_better": True,
+                "selection_rank": len(selected),
+            }
+            best_distances = [
+                min(best_distance, distance_matrix[next_id][query_index])
+                for query_index, best_distance in enumerate(best_distances)
+            ]
+
+        return ScheduleSelection(
+            memory_ids=tuple(selected),
+            oracle_scores=scores,
         )
 
 

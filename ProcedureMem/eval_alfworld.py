@@ -35,7 +35,8 @@ from ProcedureMem.alfworld_experiment import (
     write_results,
 )
 from ProcedureMem.cloud_scheduling import (
-    OracleHighScheduler,
+    OracleCoverageScheduler,
+    OracleSumScheduler,
     RandomScheduler,
     ScheduledWorkflowMemory,
     build_interval_batches,
@@ -99,7 +100,10 @@ def build_parser() -> argparse.ArgumentParser:
     )
     parser.add_argument("--edge-memory-dir", type=Path)
     parser.add_argument("--trajectory-file", type=Path, default=DEFAULT_TRAJECTORY_PATH)
-    parser.add_argument("--schedule-policy", choices=("random", "oracle_high"))
+    parser.add_argument(
+        "--schedule-policy",
+        choices=("random", "oracle_high", "oracle_sum", "oracle_coverage"),
+    )
     parser.add_argument("--interval-size", type=int)
     parser.add_argument("--construction-capacity", type=int)
     parser.add_argument("--scheduler-seed", type=int, default=42)
@@ -418,7 +422,7 @@ def main(argv: Sequence[str] | None = None) -> int:
     elif args.condition == "cloud_scheduled" and args.schedule_policy == "random":
         condition_name = f"cloud_scheduled_random_seed{args.scheduler_seed}"
     elif args.condition == "cloud_scheduled":
-        condition_name = "cloud_scheduled_oracle_high"
+        condition_name = f"cloud_scheduled_{args.schedule_policy}"
     else:
         condition_name = args.condition
 
@@ -438,12 +442,18 @@ def main(argv: Sequence[str] | None = None) -> int:
                 memory.candidate_order,
                 seed=args.scheduler_seed,
             )
+        elif args.schedule_policy == "oracle_coverage":
+            frozen_task_queries = _freeze_task_queries(
+                [task["task_id"] for task in manifest["tasks"]],
+                data_root=settings.alfworld_data,
+            )
+            scheduler = OracleCoverageScheduler()
         else:
             frozen_task_queries = _freeze_task_queries(
                 [task["task_id"] for task in manifest["tasks"]],
                 data_root=settings.alfworld_data,
             )
-            scheduler = OracleHighScheduler()
+            scheduler = OracleSumScheduler()
 
     parameters = {
         "model": settings.model_name,
@@ -542,13 +552,16 @@ def main(argv: Sequence[str] | None = None) -> int:
         "oracle_score_type": (
             "faiss_l2_distance_sum"
             if args.condition == "cloud_scheduled"
-            and args.schedule_policy == "oracle_high"
+            and args.schedule_policy in {"oracle_high", "oracle_sum"}
+            else "greedy_faiss_l2_marginal_coverage"
+            if args.condition == "cloud_scheduled"
+            and args.schedule_policy == "oracle_coverage"
             else None
         ),
         "oracle_higher_is_better": (
             False
             if args.condition == "cloud_scheduled"
-            and args.schedule_policy == "oracle_high"
+            and args.schedule_policy in {"oracle_high", "oracle_sum"}
             else None
         ),
     }
@@ -575,7 +588,9 @@ def main(argv: Sequence[str] | None = None) -> int:
         ]
 
     selected_by_interval: dict[int, list[str]] = {0: []}
-    oracle_distances_by_interval: dict[int, dict[str, float] | None] = {0: None}
+    oracle_scores_by_interval: dict[int, dict[str, dict[str, Any]] | None] = {
+        0: None
+    }
     interval_available_count = 0
 
     for offset, batch_end, interval_id, interval_start, interval_end in batch_specs:
@@ -746,17 +761,8 @@ def main(argv: Sequence[str] | None = None) -> int:
                             record.get("score") for record in retrieved_records
                         ],
                         "oracle_scores": (
-                            {
-                                memory_id: {
-                                    "value": distance,
-                                    "score_type": "faiss_l2_distance_sum",
-                                    "higher_is_better": False,
-                                }
-                                for memory_id, distance in (
-                                    oracle_distances_by_interval[interval_id] or {}
-                                ).items()
-                            }
-                            if args.schedule_policy == "oracle_high"
+                            oracle_scores_by_interval[interval_id]
+                            if args.schedule_policy != "random"
                             else None
                         ),
                     }
@@ -776,6 +782,20 @@ def main(argv: Sequence[str] | None = None) -> int:
                     memory.pending_ids,
                     args.construction_capacity,
                 )
+            elif args.schedule_policy == "oracle_coverage":
+                next_interval_end = min(
+                    batch_end + args.interval_size,
+                    len(selected_gamefiles),
+                )
+                selection = scheduler.select(
+                    memory.pending_ids,
+                    args.construction_capacity,
+                    available_ids=memory.available_ids,
+                    next_interval_queries=frozen_task_queries[
+                        batch_end:next_interval_end
+                    ],
+                    distance_scorer=memory.oracle_distance_matrix,
+                )
             else:
                 next_interval_end = min(
                     batch_end + args.interval_size,
@@ -792,9 +812,20 @@ def main(argv: Sequence[str] | None = None) -> int:
             selected_ids = list(selection.memory_ids)
             memory.activate(selected_ids, interval_id=next_interval_id)
             selected_by_interval[next_interval_id] = selected_ids
-            oracle_distances_by_interval[next_interval_id] = (
-                selection.oracle_distances
-            )
+            if selection.oracle_scores is not None:
+                oracle_scores = selection.oracle_scores
+            elif selection.oracle_distances is not None:
+                oracle_scores = {
+                    memory_id: {
+                        "value": distance,
+                        "score_type": "faiss_l2_distance_sum",
+                        "higher_is_better": False,
+                    }
+                    for memory_id, distance in selection.oracle_distances.items()
+                }
+            else:
+                oracle_scores = None
+            oracle_scores_by_interval[next_interval_id] = oracle_scores
 
     rerank_metadata = None
     if args.condition == "memory_rerank":
@@ -883,12 +914,22 @@ def main(argv: Sequence[str] | None = None) -> int:
         )
     scheduling_comparison = maybe_write_scheduling_comparison(experiment_dir)
     if scheduling_comparison:
-        print(
-            "Oracle-High vs Random mean: "
-            f"{scheduling_comparison['oracle_minus_random_success_rate_percentage_points']:+.2f} "
-            "percentage points; average-steps delta "
-            f"{scheduling_comparison['oracle_minus_random_average_steps']:+.2f}"
+        for oracle_run in scheduling_comparison.get("oracle_runs", []):
+            print(
+                f"{oracle_run['policy']} vs Random mean: "
+                f"{oracle_run['minus_random_success_rate_percentage_points']:+.2f} "
+                "percentage points; average-steps delta "
+                f"{oracle_run['minus_random_average_steps']:+.2f}"
+            )
+        coverage_delta = scheduling_comparison.get(
+            "oracle_coverage_minus_oracle_sum_success_rate_percentage_points"
         )
+        if coverage_delta is not None:
+            print(
+                "oracle_coverage vs oracle_sum: "
+                f"{coverage_delta:+.2f} percentage points; average-steps delta "
+                f"{scheduling_comparison['oracle_coverage_minus_oracle_sum_average_steps']:+.2f}"
+            )
     return 0
 
 

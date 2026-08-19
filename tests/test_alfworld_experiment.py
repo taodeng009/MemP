@@ -11,6 +11,7 @@ from ProcedureMem.alfworld_experiment import (
     inject_trajectories,
     load_json,
     manifest_sha256,
+    maybe_write_scheduling_comparison,
     retrieval_records,
     reranked_retrieval_records,
     summarize_results,
@@ -23,6 +24,68 @@ from ProcedureMem.alfworld_experiment import (
 class FakeDocument:
     def __init__(self, **metadata):
         self.metadata = metadata
+
+
+class SchedulingComparisonTests(unittest.TestCase):
+    def test_comparison_supports_sum_and_coverage_oracles(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            common_parameters = {
+                "condition_mode": "cloud_scheduled",
+                "model": "model",
+                "split": "valid_unseen",
+                "seed": 42,
+                "batch_size": 1,
+                "max_steps": 30,
+                "temperature": 0,
+                "top_p": 1.0,
+                "few_shot": True,
+                "top_k": 3,
+                "manifest_sha256": "manifest",
+                "candidate_pool_sha256": "candidates",
+                "interval_size": 10,
+                "construction_capacity": 5,
+                "scheduled_score_threshold": 0.5,
+            }
+            conditions = (
+                ("random_1", "random", 0.25, 25.0, 1),
+                ("random_2", "random", 0.50, 20.0, 2),
+                ("oracle_sum", "oracle_sum", 0.50, 19.0, None),
+                ("oracle_coverage", "oracle_coverage", 0.75, 18.0, None),
+            )
+            for condition, policy, success_rate, average_steps, seed in conditions:
+                condition_dir = root / condition
+                condition_dir.mkdir()
+                summary = {
+                    "condition": condition,
+                    "task_ids": ["task-a", "task-b"],
+                    "success_rate": success_rate,
+                    "average_steps": average_steps,
+                    "parameters": dict(
+                        common_parameters,
+                        schedule_policy=policy,
+                        scheduler_seed=seed,
+                    ),
+                }
+                (condition_dir / "summary.json").write_text(
+                    json.dumps(summary),
+                    encoding="utf-8",
+                )
+
+            comparison = maybe_write_scheduling_comparison(root)
+
+            self.assertIsNotNone(comparison)
+            self.assertEqual(len(comparison["oracle_runs"]), 2)
+            self.assertEqual(
+                comparison[
+                    "oracle_coverage_minus_oracle_sum_success_rate_percentage_points"
+                ],
+                25.0,
+            )
+            self.assertEqual(
+                comparison["oracle_coverage_minus_oracle_sum_average_steps"],
+                -1.0,
+            )
 
 
 class TaskManifestTests(unittest.TestCase):

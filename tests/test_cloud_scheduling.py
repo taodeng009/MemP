@@ -2,6 +2,7 @@ import unittest
 
 from ProcedureMem.cloud_scheduling import (
     CandidateMemory,
+    OracleCoverageScheduler,
     OracleHighScheduler,
     RandomScheduler,
     ScheduledWorkflowMemory,
@@ -121,6 +122,78 @@ class SchedulerTests(unittest.TestCase):
         self.assertEqual(first.memory_ids, ("mem_0000",))
         self.assertEqual(second.memory_ids, ("mem_0002",))
         self.assertEqual(first.oracle_distances["mem_0000"], 0.0)
+
+    def test_oracle_coverage_uses_available_pool_as_marginal_baseline(self):
+        scheduler = OracleCoverageScheduler()
+        distance_matrix = {
+            "mem_0000": (0.0, 400.0),
+            "mem_0001": (25.0, 225.0),
+            "mem_0002": (400.0, 0.0),
+        }
+
+        def score(queries, memory_ids):
+            return {
+                memory_id: distance_matrix[memory_id]
+                for memory_id in memory_ids
+            }
+
+        with_available = scheduler.select(
+            {"mem_0001", "mem_0002"},
+            1,
+            available_ids={"mem_0000"},
+            next_interval_queries=["future-a", "future-b"],
+            distance_scorer=score,
+        )
+        without_available = scheduler.select(
+            {"mem_0001", "mem_0002"},
+            1,
+            available_ids=set(),
+            next_interval_queries=["future-a", "future-b"],
+            distance_scorer=score,
+        )
+
+        self.assertEqual(with_available.memory_ids, ("mem_0002",))
+        self.assertEqual(without_available.memory_ids, ("mem_0001",))
+        self.assertEqual(
+            with_available.oracle_scores["mem_0002"]["score_type"],
+            "faiss_l2_marginal_gain",
+        )
+        self.assertEqual(with_available.oracle_scores["mem_0002"]["value"], 400.0)
+        self.assertEqual(
+            without_available.oracle_scores["mem_0001"]["score_type"],
+            "faiss_l2_distance_sum",
+        )
+
+    def test_oracle_coverage_recomputes_gain_after_each_selection(self):
+        scheduler = OracleCoverageScheduler()
+        distance_matrix = {
+            "mem_0000": (10.0, 10.0),
+            "mem_0001": (0.0, 10.0),
+            "mem_0002": (1.0, 10.0),
+            "mem_0003": (10.0, 0.0),
+        }
+
+        def score(queries, memory_ids):
+            return {
+                memory_id: distance_matrix[memory_id]
+                for memory_id in memory_ids
+            }
+
+        selection = scheduler.select(
+            {"mem_0001", "mem_0002", "mem_0003"},
+            2,
+            available_ids={"mem_0000"},
+            next_interval_queries=["future-a", "future-b"],
+            distance_scorer=score,
+        )
+
+        self.assertEqual(selection.memory_ids, ("mem_0001", "mem_0003"))
+        self.assertEqual(
+            selection.oracle_scores["mem_0001"]["selection_rank"], 1
+        )
+        self.assertEqual(
+            selection.oracle_scores["mem_0003"]["selection_rank"], 2
+        )
 
     def test_capacity_is_respected_and_memory_is_not_selected_twice(self):
         ids = [item.memory_id for item in candidates(5)]

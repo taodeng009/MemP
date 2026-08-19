@@ -497,7 +497,7 @@ def maybe_write_memory_rerank_comparison(
 def maybe_write_scheduling_comparison(
     experiment_dir: str | Path,
 ) -> dict[str, Any] | None:
-    """Write the minimal Random versus Oracle-High feasibility comparison."""
+    """Write Random versus available Oracle scheduling comparisons."""
     root = Path(experiment_dir)
     summaries = []
     if not root.is_dir():
@@ -513,15 +513,19 @@ def maybe_write_scheduling_comparison(
         if item.get("parameters", {}).get("schedule_policy") == "random"
     ]
     oracle_summaries = [
-        item for item in summaries
-        if item.get("parameters", {}).get("schedule_policy") == "oracle_high"
+        item
+        for item in summaries
+        if item.get("parameters", {}).get("schedule_policy")
+        in {"oracle_high", "oracle_sum", "oracle_coverage"}
     ]
     if not random_summaries or not oracle_summaries:
         return None
-    if len(oracle_summaries) != 1:
-        raise ValueError(
-            "Scheduling comparison requires exactly one Oracle-High summary"
-        )
+    oracle_policies = [
+        item.get("parameters", {}).get("schedule_policy")
+        for item in oracle_summaries
+    ]
+    if len(oracle_policies) != len(set(oracle_policies)):
+        raise ValueError("Scheduling comparison requires one summary per Oracle policy")
 
     reference = random_summaries[0]
     reference_parameters = reference["parameters"]
@@ -563,9 +567,32 @@ def maybe_write_scheduling_comparison(
     random_steps = [float(item["average_steps"]) for item in random_summaries]
     random_sr_mean = statistics.fmean(random_success_rates)
     random_steps_mean = statistics.fmean(random_steps)
-    oracle = oracle_summaries[0]
-    oracle_sr = float(oracle["success_rate"])
-    oracle_steps = float(oracle["average_steps"])
+    oracle_runs = []
+    for oracle in oracle_summaries:
+        oracle_sr = float(oracle["success_rate"])
+        oracle_steps = float(oracle["average_steps"])
+        oracle_runs.append(
+            {
+                "policy": oracle["parameters"]["schedule_policy"],
+                "condition": oracle["condition"],
+                "success_rate": oracle_sr,
+                "average_steps": oracle_steps,
+                "minus_random_success_rate": oracle_sr - random_sr_mean,
+                "minus_random_success_rate_percentage_points": (
+                    oracle_sr - random_sr_mean
+                )
+                * 100,
+                "minus_random_average_steps": oracle_steps - random_steps_mean,
+            }
+        )
+    oracle_runs.sort(key=lambda item: item["policy"])
+    primary_policy_order = ("oracle_high", "oracle_sum", "oracle_coverage")
+    primary_oracle = next(
+        item
+        for policy in primary_policy_order
+        for item in oracle_runs
+        if item["policy"] == policy
+    )
     comparison = {
         "schema_version": RESULT_SCHEMA_VERSION,
         "experiment_type": "construction_scheduling_feasibility",
@@ -583,15 +610,39 @@ def maybe_write_scheduling_comparison(
         "random_success_rate_std": statistics.pstdev(random_success_rates),
         "random_average_steps_mean": random_steps_mean,
         "random_average_steps_std": statistics.pstdev(random_steps),
-        "oracle_condition": oracle["condition"],
-        "oracle_success_rate": oracle_sr,
-        "oracle_average_steps": oracle_steps,
-        "oracle_minus_random_success_rate": oracle_sr - random_sr_mean,
+        "oracle_runs": oracle_runs,
+        # Preserve the original scalar fields for existing result consumers.
+        "oracle_condition": primary_oracle["condition"],
+        "oracle_success_rate": primary_oracle["success_rate"],
+        "oracle_average_steps": primary_oracle["average_steps"],
+        "oracle_minus_random_success_rate": primary_oracle[
+            "minus_random_success_rate"
+        ],
         "oracle_minus_random_success_rate_percentage_points": (
-            oracle_sr - random_sr_mean
-        ) * 100,
-        "oracle_minus_random_average_steps": oracle_steps - random_steps_mean,
+            primary_oracle["minus_random_success_rate_percentage_points"]
+        ),
+        "oracle_minus_random_average_steps": primary_oracle[
+            "minus_random_average_steps"
+        ],
     }
+    by_policy = {item["policy"]: item for item in oracle_runs}
+    if "oracle_sum" in by_policy and "oracle_coverage" in by_policy:
+        oracle_sum = by_policy["oracle_sum"]
+        oracle_coverage = by_policy["oracle_coverage"]
+        comparison.update(
+            {
+                "oracle_coverage_minus_oracle_sum_success_rate": (
+                    oracle_coverage["success_rate"] - oracle_sum["success_rate"]
+                ),
+                "oracle_coverage_minus_oracle_sum_success_rate_percentage_points": (
+                    oracle_coverage["success_rate"] - oracle_sum["success_rate"]
+                )
+                * 100,
+                "oracle_coverage_minus_oracle_sum_average_steps": (
+                    oracle_coverage["average_steps"] - oracle_sum["average_steps"]
+                ),
+            }
+        )
     write_json(root / "scheduling_comparison.json", comparison)
     _write_csv(root / "scheduling_comparison.csv", [comparison])
     return comparison

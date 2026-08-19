@@ -4,7 +4,7 @@
 
 第一阶段只实现一个最小的 **construction scheduling feasibility experiment**，验证以下问题：
 
-> 在完全相同的 candidate memories、evaluation tasks、interval size `B`、construction capacity `C` 和 retrieval 配置下，比较 Random 与 Oracle-High，判断仅改变 workflow memory 的 construction/activation order 是否能够显著影响后续 ALFWorld Agent performance。
+> 在完全相同的 candidate memories、evaluation tasks、interval size `B`、construction capacity `C` 和 retrieval 配置下，比较 Random、`oracle_sum` 与 `oracle_coverage`，判断仅改变 workflow memory 的 construction/activation order 是否能够显著影响后续 ALFWorld Agent performance，并验证 set-level coverage 是否能够减少逐 memory 排序造成的冗余 selection。
 
 本阶段不实现在线 memory builder、复杂优化算法或通用实验基础设施。所有候选 workflow memories 在实验开始前已经构建完成，实验运行过程中只模拟它们按照不同顺序逐步进入 available memory pool。
 
@@ -73,7 +73,7 @@ tasks 20-29   available memory count = 6
 - `workflow` 是注入 Agent prompt 的 workflow guideline；
 - `trajectory_index` 为可选字段，已有可靠值时保留，没有时不强制恢复。
 
-可以对规范化后的 300 条 `(memory_id, query, workflow)` 计算一个简单 candidate pool hash，用于确认 Random 与 Oracle-High 使用同一候选池。除此之外，不增加 source trajectory SHA、prompt SHA、build manifest SHA、复杂 `memory_id` hash 或迁移校验流程。
+可以对规范化后的 300 条 `(memory_id, query, workflow)` 计算一个简单 candidate pool hash，用于确认 Random、`oracle_sum` 与 `oracle_coverage` 使用同一候选池。除此之外，不增加 source trajectory SHA、prompt SHA、build manifest SHA、复杂 `memory_id` hash 或迁移校验流程。
 
 ## 5. Available Memory Wrapper
 
@@ -119,7 +119,7 @@ retrieval 继续复用现有 Cloud workflow memory 配置：
 
 ## 6. Scheduling Policies
 
-第一阶段只实现 Random 和 Oracle-High。
+第一阶段实现 Random，并同时保留原 Oracle 与新增 Set-Coverage Oracle，分别命名为 `oracle_sum` 和 `oracle_coverage`。
 
 ### 6.1 Random
 
@@ -132,24 +132,30 @@ retrieval 继续复用现有 Cloud workflow memory 配置：
 - Random scheduler 不读取 future evaluation queries；
 - 正式实验运行多个 Random seeds，用于观察随机 construction order 的均值和方差。
 
-### 6.2 Oracle-High
+### 6.2 Oracle 的使用边界
 
-Oracle-High 仅用于验证 construction scheduling 是否存在可优化空间，是使用 privileged future-task information 的 **upper-bound baseline**，不是可部署策略。
+两种 Oracle 仅用于验证 construction scheduling 是否存在可优化空间，是使用 privileged future-task information 的 **upper-bound baselines**，不是可部署策略。
 
-interval `t` 结束后，Oracle-High 读取下一个 interval `t+1` 的最多 `B` 个冻结 evaluation task queries，记为 $\mathcal I_{t+1}$。当前实现的 FAISS retrieval score 是 L2 distance，数值越小表示越相似。因此，对每条尚未 available 的 candidate memory $w_j$，直接计算累计距离：
+两种 Oracle 都在 interval `t` 结束后读取下一个 interval `t+1` 的最多 `B` 个冻结 evaluation task queries，记为 $\mathcal I_{t+1}$。当前 FAISS score 是 L2 distance，数值越小表示越相似。距离使用与 Cloud retrieval 相同的 embedding model，根据 evaluation task query 与 candidate memory `query` 计算。
+
+Oracle 只能使用下一 interval 的冻结 task queries，不能读取 reward、success、steps、termination reason 或 Agent trajectory，也不能根据已经完成的 interval results 调整选择。Oracle scoring 只影响 activation order，不改变 Agent retrieval 配置。
+
+evaluation task query 在实验前随固定 task manifest 一起冻结。Random runner 使用相同的 evaluation task manifest，但不把 future query 传给 Random scheduler。
+
+### 6.3 `oracle_sum`：原逐 Memory 累计距离方法
+
+`oracle_sum` 保留原 Oracle-High 的计算方法，作为对照。对每条尚未 available 的 candidate memory $w_j$，独立计算累计距离：
 
 $$
-D_{j,t}^{\mathrm{oracle}}
+D_{j,t}^{\mathrm{sum}}
 =
 \sum_{q_i \in \mathcal I_{t+1}}
 d_{\mathrm{FAISS}}(q_i,w_j)
 $$
 
-其中，$d_{\mathrm{FAISS}}(q_i,w_j)$ 使用与 Cloud retrieval 相同的 embedding model，根据 evaluation task query 与 candidate memory `query` 计算 L2 distance。
+`oracle_sum` 按 $D_{j,t}^{\mathrm{sum}}$ 从小到大排序，选择 Bottom-`C` unavailable memories；累计距离相同时使用 `memory_id` 作为稳定 tie-breaker。选中的 memories 从下一 interval 开始生效。
 
-Oracle-High 按 $D_{j,t}^{\mathrm{oracle}}$ 从小到大排序，选择 Bottom-`C` unavailable memories；累计距离相同时使用 `memory_id` 作为稳定 tie-breaker。选中的 memories 从下一 interval 开始生效。这里名称中的 `High` 表示预期 relevance 高，并不表示原始 FAISS distance 数值高。
-
-等价地，也可以定义 $S(q_i,w_j)=-d_{\mathrm{FAISS}}(q_i,w_j)$，再选择累计 similarity 最大的 Top-`C`。第一阶段统一采用“累计原始 distance、越小越好、选择 Bottom-`C`”的写法，避免实现时误将最不相关的 memories 排在前面。
+该方法不考虑 selected memories 之间的互补性，可能在同一 interval 中选出 exact-query duplicates，或把多条 construction slots 集中到同一 task family。
 
 参考实现：
 
@@ -165,16 +171,112 @@ selected_ids = sorted(
 )[:construction_capacity]
 ```
 
-Oracle-High 必须满足：
+### 6.4 `oracle_coverage`：Greedy Marginal Set-Coverage
 
-- 每个 interval 使用下一 interval queries 重新计算 ranking；
-- 不能为每条 memory 使用一个全局固定 Oracle distance；
-- 累计 FAISS L2 distance 必须按升序排列并选择 Bottom-`C`，不能选择数值最大的 memories；
-- 只能读取下一个 interval 的 task queries，不能读取 reward、success、steps、termination reason 或 Agent trajectory；
-- 不能根据已经完成的 interval results 调整 score；
-- Oracle scoring 只影响 activation order，不改变 Agent retrieval 配置。
+`oracle_coverage` 使用下一 interval queries 与当前 available memories、pending candidate memories 之间的完整 distance matrix 进行集合级贪心选择。其优化目标是 **newly selected memories 相对于 already-available memory pool 的 marginal semantic coverage**，而不仅仅是本轮 selected memories 之间的互补性。
 
-evaluation task query 在实验前随固定 task manifest 一起冻结。Random runner 使用相同的 evaluation task manifest，但不把 future query 传给 Random scheduler。
+在 interval `t` 结束、准备为 interval `t+1` 选择新 memory 时，先读取当前已经 available 的 memory 集合 $\mathcal M_t^C$。
+
+当 $\mathcal M_t^C$ 非空时，对下一 interval 的每个 query $q_i$，首先计算 available pool 已经提供的最佳距离：
+
+$$
+d_i^{best}
+=
+\min_{w\in\mathcal M_t^C}
+d_{\mathrm{FAISS}}(q_i,w)
+$$
+
+然后对每条 pending candidate memory $w_j$，计算它相对于当前 available pool 以及本轮已选 memories 的边际改善：
+
+$$
+\Delta_j
+=
+\sum_{q_i\in\mathcal I_{t+1}}
+\max\left(0,\ d_i^{best}-d_{\mathrm{FAISS}}(q_i,w_j)\right)
+$$
+
+选择 $\Delta_j$ 最大的 memory，并更新：
+
+$$
+d_i^{best}
+=
+\min\left(d_i^{best},d_{\mathrm{FAISS}}(q_i,w_j)\right)
+$$
+
+只有当当前 available pool 为空，即 $\mathcal M_t^C=\varnothing$ 时，才使用累计 distance 最小的 pending candidate 作为第一条 memory：
+
+$$
+w_{(1)}
+=
+\arg\min_{w_j}
+\sum_{q_i\in\mathcal I_{t+1}}
+d_{\mathrm{FAISS}}(q_i,w_j)
+$$
+
+并以该 memory 初始化：
+
+$$
+d_i^{best}=d_{\mathrm{FAISS}}(q_i,w_{(1)})
+$$
+
+之后进入相同的 greedy marginal selection。重复计算 marginal gain、选择和更新，直到选满 `C` 条 memory，或 pending candidate pool 已耗尽。当 available pool 非空时，本轮第一条 memory 也按 $\Delta_j$ 最大原则选择；仅在 available pool 为空时，第一条 memory 才按累计 distance 最小原则选择。所有 score tie 均使用 `memory_id` 作为稳定 tie-breaker；即使所有剩余 $\Delta_j=0$，只要 candidate pool 尚未耗尽，也继续选择直到达到 `C`。
+
+参考实现：
+
+```python
+pending_ids = sorted(pending_ids)
+
+if available_ids:
+    best_distance = {
+        query_id: min(
+            distance[query_id][memory_id]
+            for memory_id in available_ids
+        )
+        for query_id in next_query_ids
+    }
+    selected_ids = []
+else:
+    first_id = min(
+        pending_ids,
+        key=lambda memory_id: (
+            sum(distance[query_id][memory_id] for query_id in next_query_ids),
+            memory_id,
+        ),
+    )
+    selected_ids = [first_id]
+    best_distance = {
+        query_id: distance[query_id][first_id]
+        for query_id in next_query_ids
+    }
+
+while len(selected_ids) < min(construction_capacity, len(pending_ids)):
+    remaining_ids = [mid for mid in pending_ids if mid not in selected_ids]
+    marginal_gain = {
+        memory_id: sum(
+            max(0.0, best_distance[query_id] - distance[query_id][memory_id])
+            for query_id in next_query_ids
+        )
+        for memory_id in remaining_ids
+    }
+    next_id = min(remaining_ids, key=lambda mid: (-marginal_gain[mid], mid))
+    selected_ids.append(next_id)
+    for query_id in next_query_ids:
+        best_distance[query_id] = min(
+            best_distance[query_id],
+            distance[query_id][next_id],
+        )
+```
+
+`oracle_coverage` 必须满足：
+
+- 每个 interval 使用下一 interval queries 重新计算 distance matrix 和 greedy selection；
+- available pool 非空时，必须先用全部 `available_ids` 初始化每个 query 的 $d_i^{best}$；
+- available pool 为空时，才允许用累计 distance 最小的 pending candidate 初始化第一条选择；
+- 每加入一条 memory，都必须更新每个 query 的 $d_i^{best}$，再重新计算剩余 candidates 的 $\Delta_j$；
+- selection 仅排除已经 available 或本轮已经选中的 IDs，不执行 duplicate-query filtering；
+- set-coverage 只改变 activation order，不改变 retrieval threshold、Top-K、`B`、`C`、candidate pool 或 initial available pool。
+
+这里的 set coverage 定义为 newly selected memories 相对于 already-available memory pool，对 future queries 带来的连续 best-distance improvement，不是基于 retrieval threshold 的二值覆盖。candidate pool 中的 duplicate queries 保持原样，以便单独验证集合级目标是否能减少原 `oracle_sum` 的冗余 selection。
 
 ## 7. Interval-aware ALFWorld Runner
 
@@ -184,14 +286,14 @@ evaluation task query 在实验前随固定 task manifest 一起冻结。Random 
 
 ```text
 --condition cloud_scheduled
---schedule-policy random|oracle_high
+--schedule-policy random|oracle_sum|oracle_coverage
 --interval-size B
 --construction-capacity C
 --scheduler-seed SEED
 --candidate-memory-file PATH
 ```
 
-Oracle-High 从冻结 evaluation task manifest 中读取 task queries，不需要额外的全局 Oracle score 文件。
+`oracle_sum` 和 `oracle_coverage` 都从冻结 evaluation task manifest 中读取 task queries，不需要额外的全局 Oracle score 文件。
 
 任务循环按照 interval 边界执行。每次实际 batch 大小为：
 
@@ -235,8 +337,9 @@ oracle_scores
 说明：
 
 - `selected_memory_ids` 表示在该 interval 开始时新生效的 memories；第 0 个 interval 为空；
-- `oracle_scores` 仅 Oracle-High 使用，记录本 interval 开始时激活 memories 在上一个 interval 边界计算得到的累计 distance；Random 保存为 `null`；
-- `oracle_scores` 明确标注 `score_type = faiss_l2_distance_sum` 和 `higher_is_better = false`；
+- `oracle_scores` 仅 `oracle_sum` 和 `oracle_coverage` 使用，Random 保存为 `null`；
+- `oracle_sum` 记录每条 selected memory 的 `faiss_l2_distance_sum`，并标注 `higher_is_better = false`；
+- `oracle_coverage` 按 greedy selection rank 记录 score：available pool 非空时，本轮所有 selected memories 都记录相对于 available pool 加本轮已选集合的 `marginal_gain`；available pool 为空时，第一条记录累计 distance，后续记录 `marginal_gain`。累计 distance 标注 `higher_is_better = false`，marginal gain 标注 `higher_is_better = true`；
 - `retrieval_scores` 保持现有单次 FAISS retrieval score 语义，不能和跨 query 求和后的 Oracle distance 直接比较。
 
 ### 8.2 Summary
@@ -248,13 +351,14 @@ oracle_scores
 - 每个 interval 的 success rate；
 - 每个 interval 结束后的 cumulative success rate。
 
-完成 Random 与 Oracle-High 后，输出一个简单比较：
+完成 Random、`oracle_sum` 与 `oracle_coverage` 后，输出一个简单比较：
 
 - Random 各 seed 的 SR 和 average steps；
 - Random mean/std；
-- Oracle-High SR 和 average steps；
-- Oracle-High 相对 Random mean 的 SR 差值；
-- Oracle-High 相对 Random mean 的 average steps 差值。
+- `oracle_sum` 和 `oracle_coverage` 各自的 SR 和 average steps；
+- 两种 Oracle 分别相对 Random mean 的 SR 差值；
+- 两种 Oracle 分别相对 Random mean 的 average steps 差值；
+- `oracle_coverage` 相对 `oracle_sum` 的结果差异。
 
 不实现 candidate pool snapshot、多层 pool SHA、next-interval query subset hash、Top-1 frequency、retrieval overlap、activation-frequency statistics 或独立的通用 policy comparison framework。
 
@@ -271,7 +375,7 @@ tests/test_cloud_scheduling.py
 1. 未激活的 candidate memory 不能被 retrieve；
 2. 新激活 memory 只能从下一 interval 生效；
 3. Random 在相同 scheduler seed 下产生相同 activation order；
-4. Oracle-High 每个 interval 使用下一 interval queries 重新计算累计 FAISS L2 distance，并选择 Bottom-`C`；
+4. `oracle_sum` 每个 interval 重新计算累计 FAISS L2 distance；`oracle_coverage` 使用当前 `available_ids` 初始化 $d_i^{best}$，仅在 available pool 为空时以累计 distance 最小的 candidate 初始化，并在每轮选择后更新 $d_i^{best}$、重新计算 marginal gains；
 5. scheduler 每次选择数量不超过 `C`，且不能重复激活 memory；
 6. batch 不跨 logical interval 边界。
 
@@ -285,7 +389,8 @@ tests/test_cloud_scheduling.py
 candidate memory loader
 scheduled/available memory wrapper
 Random scheduler
-Oracle-High scheduler
+Oracle Sum scheduler
+Oracle Coverage scheduler
 interval-aware ALFWorld runner
 minimal result logger
 ```
@@ -296,7 +401,7 @@ minimal result logger
 ProcedureMem/cloud_scheduling.py
 ```
 
-其中包含 candidate loader、available memory wrapper、Random scheduler 和 Oracle-High scheduler。其余修改集中在：
+其中包含 candidate loader、available memory wrapper、Random scheduler、Oracle Sum scheduler 和 Oracle Coverage scheduler。其余修改集中在：
 
 ```text
 ProcedureMem/eval_alfworld.py
@@ -312,9 +417,9 @@ scripts/run_alfworld_cloud_scheduling.sh
 1. 从现有 300 条 workflow documents 加载并分配稳定 `memory_id`。
 2. 实现 candidate/available/pending 集合和按 interval 重建的 available FAISS index。
 3. 实现 deterministic Random scheduler。
-4. 实现 interval-dependent Oracle-High scheduler。
+4. 保留并命名 interval-dependent `oracle_sum`，实现 greedy marginal `oracle_coverage` scheduler。
 5. 将现有 ALFWorld task loop 改为 interval-aware loop，并保证 batch 不跨 interval。
-6. 增加最小 task log、interval/cumulative summary 和 Random vs Oracle-High 比较。
+6. 增加最小 task log、interval/cumulative summary 和 Random vs `oracle_sum` vs `oracle_coverage` 比较。
 7. 完成六项 correctness tests。
 8. 使用同一 valid_unseen task manifest 运行小规模 pilot。
 
@@ -327,13 +432,13 @@ B = 10
 C = 5
 Top-K = 3
 temperature = 0
-Policies = Random(seed 1/2/3), Oracle-High
+Policies = Random(seed 1/2/3), oracle_sum, oracle_coverage
 ```
 
 ## 12. 第一阶段验收标准
 
-1. Random 与 Oracle-High 使用完全相同的 300 条 candidate memories。
-2. Random 与 Oracle-High 使用完全相同的 valid_unseen tasks、顺序、`B`、`C` 和 retrieval 配置。
+1. Random、`oracle_sum` 与 `oracle_coverage` 使用完全相同的 300 条 candidate memories。
+2. 三种 policy 使用完全相同的 valid_unseen tasks、顺序、`B`、`C` 和 retrieval 配置。
 3. Agent 只能检索当前 `available_ids` 中的 memory。
 4. 每完成 `B` 个 tasks，scheduler 最多激活 `C` 条 pending memory。
 5. 新 memory 只从下一 interval 开始生效。
@@ -341,7 +446,8 @@ Policies = Random(seed 1/2/3), Oracle-High
 7. batch 不跨 logical interval 边界。
 8. candidate pool 耗尽后，剩余 tasks 继续正常执行。
 9. Random activation order 在相同 scheduler seed 下可复现。
-10. Oracle-High 针对每个 next interval 动态重新计算累计 FAISS L2 distance，按升序选择 Bottom-`C`，并且不读取任务执行结果。
-11. 能输出 overall SR、average steps、interval/cumulative SR 和简单的 Random vs Oracle-High 比较。
+10. `oracle_sum` 针对每个 next interval 动态重新计算累计 FAISS L2 distance 并按升序选择；`oracle_coverage` 以 already-available pool 为 coverage baseline，按 greedy marginal set-coverage 逐条选择，且两者都不读取任务执行结果。
+11. `oracle_coverage` 不修改 retrieval threshold、Top-K、`B`、`C`、candidate pool 或 initial available pool，也不加入 duplicate-query filtering。
+12. 能输出 overall SR、average steps、interval/cumulative SR，以及 Random、`oracle_sum`、`oracle_coverage` 的简单比较。
 
-第一阶段完成后，只需要回答一个问题：在固定 construction capacity 下，Oracle-High 是否能够相对 Random 获得可观察的 Agent performance 改善，从而证明 Cloud workflow memory construction scheduling 存在值得进一步优化的空间。
+第一阶段完成后，需要回答两个紧密相关的问题：在固定 construction capacity 下，future-query-aware Oracle 是否能够相对 Random 获得可观察的 Agent performance 改善；在不改变其他实验设置的条件下，`oracle_coverage` 是否能相对于 already-available memory pool 选择边际覆盖更高的新 memories，并比 `oracle_sum` 产生更低冗余、更互补的 activation order，从而改善后续 retrieval 或 Agent performance。

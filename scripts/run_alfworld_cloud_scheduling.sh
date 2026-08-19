@@ -13,10 +13,11 @@ MAX_STEPS="${MAX_STEPS:-30}"
 TEMPERATURE="${TEMPERATURE:-0}"
 TOP_K="${TOP_K:-3}"
 read -r -a RANDOM_SEEDS_ARRAY <<< "${RANDOM_SEEDS:-1 2 3}"
+read -r -a ORACLE_POLICIES_ARRAY <<< "${ORACLE_POLICIES:-oracle_sum oracle_coverage}"
 
 MANIFEST="ProcedureMem/Alfworld/manifests/${SPLIT}_seed${SEED}_n${TASK_COUNT}.json"
 CANDIDATES="ProcedureMem/memory/alfworld/direct/documents.json"
-EXPERIMENT_NAME="cloud_scheduling_${SPLIT}_seed${SEED}_n${TASK_COUNT}_b${INTERVAL_SIZE}_c${CONSTRUCTION_CAPACITY}"
+EXPERIMENT_NAME="${EXPERIMENT_NAME:-cloud_scheduling_${SPLIT}_seed${SEED}_n${TASK_COUNT}_b${INTERVAL_SIZE}_c${CONSTRUCTION_CAPACITY}}"
 
 python -m ProcedureMem.eval_alfworld \
   --condition no_memory \
@@ -50,10 +51,12 @@ for scheduler_seed in "${RANDOM_SEEDS_ARRAY[@]}"; do
     "${COMMON_ARGS[@]}"
 done
 
-python -m ProcedureMem.eval_alfworld \
-  --schedule-policy oracle_high \
-  --condition-name cloud_scheduled_oracle_high \
-  "${COMMON_ARGS[@]}"
+for oracle_policy in "${ORACLE_POLICIES_ARRAY[@]}"; do
+  python -m ProcedureMem.eval_alfworld \
+    --schedule-policy "$oracle_policy" \
+    --condition-name "cloud_scheduled_${oracle_policy}" \
+    "${COMMON_ARGS[@]}"
+done
 
 echo "Results: ProcedureMem/Alfworld/results/paired/${EXPERIMENT_NAME}"
 echo "Comparison: ProcedureMem/Alfworld/results/paired/${EXPERIMENT_NAME}/scheduling_comparison.json"
