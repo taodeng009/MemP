@@ -9,15 +9,26 @@ TASK_COUNT="${TASK_COUNT:-50}"
 BATCH_SIZE="${BATCH_SIZE:-2}"
 INTERVAL_SIZE="${INTERVAL_SIZE:-10}"
 CONSTRUCTION_CAPACITY="${CONSTRUCTION_CAPACITY:-5}"
+WARM_START_COUNT="${WARM_START_COUNT:-0}"
+WARM_START_SEED="${WARM_START_SEED:-42}"
 MAX_STEPS="${MAX_STEPS:-30}"
 TEMPERATURE="${TEMPERATURE:-0}"
 TOP_K="${TOP_K:-3}"
 read -r -a RANDOM_SEEDS_ARRAY <<< "${RANDOM_SEEDS:-1 2 3}"
-read -r -a ORACLE_POLICIES_ARRAY <<< "${ORACLE_POLICIES:-oracle_sum oracle_coverage}"
+DEFAULT_ORACLE_POLICIES="oracle_sum oracle_coverage"
+if [[ "$WARM_START_COUNT" != "0" ]]; then
+  DEFAULT_ORACLE_POLICIES="oracle_coverage"
+fi
+read -r -a ORACLE_POLICIES_ARRAY <<< "${ORACLE_POLICIES:-$DEFAULT_ORACLE_POLICIES}"
 
 MANIFEST="ProcedureMem/Alfworld/manifests/${SPLIT}_seed${SEED}_n${TASK_COUNT}.json"
 CANDIDATES="ProcedureMem/memory/alfworld/direct/documents.json"
-EXPERIMENT_NAME="${EXPERIMENT_NAME:-cloud_scheduling_${SPLIT}_seed${SEED}_n${TASK_COUNT}_b${INTERVAL_SIZE}_c${CONSTRUCTION_CAPACITY}}"
+WARM_START_SUFFIX=""
+if [[ "$WARM_START_COUNT" != "0" ]]; then
+  WARM_START_SUFFIX="_warm${WARM_START_COUNT}_ws${WARM_START_SEED}"
+fi
+DEFAULT_EXPERIMENT_NAME="cloud_scheduling_${SPLIT}_seed${SEED}_n${TASK_COUNT}_b${INTERVAL_SIZE}_c${CONSTRUCTION_CAPACITY}${WARM_START_SUFFIX}"
+EXPERIMENT_NAME="${EXPERIMENT_NAME:-$DEFAULT_EXPERIMENT_NAME}"
 
 python -m ProcedureMem.eval_alfworld \
   --condition no_memory \
@@ -35,6 +46,8 @@ COMMON_ARGS=(
   --candidate-memory-file "$CANDIDATES"
   --interval-size "$INTERVAL_SIZE"
   --construction-capacity "$CONSTRUCTION_CAPACITY"
+  --warm-start-count "$WARM_START_COUNT"
+  --warm-start-seed "$WARM_START_SEED"
   --batch-size "$BATCH_SIZE"
   --max-steps "$MAX_STEPS"
   --temperature "$TEMPERATURE"

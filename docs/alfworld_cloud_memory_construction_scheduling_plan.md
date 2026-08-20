@@ -451,3 +451,287 @@ Policies = Random(seed 1/2/3), oracle_sum, oracle_coverage
 12. 能输出 overall SR、average steps、interval/cumulative SR，以及 Random、`oracle_sum`、`oracle_coverage` 的简单比较。
 
 第一阶段完成后，需要回答两个紧密相关的问题：在固定 construction capacity 下，future-query-aware Oracle 是否能够相对 Random 获得可观察的 Agent performance 改善；在不改变其他实验设置的条件下，`oracle_coverage` 是否能相对于 already-available memory pool 选择边际覆盖更高的新 memories，并比 `oracle_sum` 产生更低冗余、更互补的 activation order，从而改善后续 retrieval 或 Agent performance。
+
+## 13. 第二阶段：Warm-Start Construction Scheduling
+
+### 13.1 实验目标
+
+第一阶段使用 cold start，即 interval 0 开始时 `available_ids` 为空。第二阶段增加 warm-start 实验，用于比较 Agent 已经持有一组固定 workflow memories 时，Random 与 `oracle_coverage` 对后续 construction capacity 的使用效率。
+
+warm-start 实验开始时，从相同的 300 条 ALFWorld train candidate workflows 中，使用固定 `warm_start_seed` 随机抽取固定数量 `W` 的 memories，作为所有 policy 完全相同的 initial available pool。
+
+必须保持：
+
+```text
+same candidate pool
+same warm_start_count W
+same warm_start_seed
+same initial_available_ids
+same evaluation task manifest and order
+same B and C
+same retrieval Top-K and threshold
+```
+
+warm-start pool 是实验开始前已经 available 的 memories，不属于任何 interval 的 scheduler construction，因此不消耗每个 interval 的 construction capacity `C`。
+
+### 13.2 初始 Pool 定义
+
+新增参数：
+
+```text
+--warm-start-count W
+--warm-start-seed SEED
+```
+
+建议默认值：
+
+```text
+warm_start_count = 0
+warm_start_seed = 42
+```
+
+其中 `warm_start_count=0` 必须完全保留现有 cold-start 行为和旧命令语义。
+
+warm-start IDs 使用独立的 local random generator 生成：
+
+```python
+def select_warm_start_ids(candidate_ids, *, count, seed):
+    if count < 0 or count > len(candidate_ids):
+        raise ValueError("Invalid warm-start count")
+    ids = list(candidate_ids)
+    random.Random(seed).shuffle(ids)
+    selected = set(ids[:count])
+    return tuple(memory_id for memory_id in candidate_ids if memory_id in selected)
+```
+
+输出重新按照稳定 candidate order 排列，使不同 policy 的日志、hash 和 FAISS document order 可直接比较。
+
+初始化完成后：
+
+```text
+available_ids = initial_available_ids
+pending_ids = candidate_ids - initial_available_ids
+```
+
+参数语义必须分离：
+
+- `warm_start_seed` 只决定所有 policy 共享的 initial available pool；
+- `scheduler_seed` 只决定 Random policy 后续 pending memories 的 activation order；
+- warm-start sampling 不能读取或修改全局 random state。
+
+### 13.3 Interval 语义
+
+warm-start 实验执行顺序：
+
+```text
+生成并激活 W 条 initial memories
+        ↓
+重建 interval 0 available FAISS index
+        ↓
+执行 interval 0 的 B 个 tasks
+        ↓
+scheduler 从 pending_ids 中选择最多 C 条 memories
+        ↓
+新 memories 从 interval 1 开始生效
+```
+
+interval 0 必须满足：
+
+```text
+selected_memory_ids = []
+available_memory_count = W
+```
+
+`selected_memory_ids` 继续只表示 scheduler 在上一个 interval 边界选择、并于当前 interval 开始生效的新 memories。initial available IDs 单独记录，不能把它们记作 interval 0 的 scheduler selection。
+
+若 candidate pool 尚未耗尽，则 interval `t` 的 available memory count 为：
+
+$$
+\left|\mathcal M_t^C\right|
+=
+\min\left(300,\ W+tC\right)
+$$
+
+其余逻辑保持不变：同一 interval 使用固定 snapshot、batch 不跨 interval、新 construction memory 只从下一 interval 生效、candidate pool 耗尽后继续执行剩余 tasks。
+
+### 13.4 Random Policy
+
+Random scheduler 继续对完整 candidate ID list 使用独立 `scheduler_seed` 生成固定 permutation，并在 selection 时根据 `pending_ids` 过滤。由于 initial available IDs 已经从 pending pool 排除，Random 不会重复激活 warm-start memory。
+
+Random 的 construction capacity 仍为每个 interval 最多 `C` 条，warm-start count `W` 不影响该容量。
+
+### 13.5 Oracle-Coverage Policy
+
+现有 `oracle_coverage` 已经接收当前 `available_ids`。warm-start 下，interval 0 结束时首先使用 initial available pool $\mathcal M_0^C$ 计算：
+
+$$
+d_i^{best}
+=
+\min_{w\in\mathcal M_0^C}d(q_i,w)
+$$
+
+然后对每条 pending candidate memory 计算：
+
+$$
+\Delta_j
+=
+\sum_i
+\max\left(0,d_i^{best}-d(q_i,w_j)\right)
+$$
+
+因此当 `warm_start_count > 0` 时，Oracle-Coverage 的第一次 scheduler selection 也必须全部使用：
+
+```text
+score_type = faiss_l2_marginal_gain
+higher_is_better = true
+```
+
+只有 cold start，即 `warm_start_count=0` 时，第一次 selection 的第一条 memory 才使用累计 distance 最小原则初始化。
+
+本阶段不修改 coverage objective、retrieval threshold、Top-K、`B`、`C`、candidate pool，也不加入 duplicate-query filtering。
+
+### 13.6 Runner 修改
+
+在 candidate memories 加载完成后、创建 scheduler 和执行 interval 0 前：
+
+```python
+initial_available_ids = select_warm_start_ids(
+    memory.candidate_order,
+    count=args.warm_start_count,
+    seed=args.warm_start_seed,
+)
+
+memory.activate(initial_available_ids, interval_id=0)
+```
+
+随后直接复用现有 runner：
+
+- interval 0 开始时根据 warm-start pool 重建 FAISS index；
+- `pending_ids` 自动排除 initial memories；
+- Random 从剩余 pending IDs 中选择；
+- Oracle-Coverage 以 warm-start pool 作为 marginal coverage baseline；
+- cold start 在 `W=0` 时保持原样。
+
+不新增在线 memory builder、warm-start migration tool 或复杂 pool infrastructure。
+
+### 13.7 日志与 Comparison
+
+在 `experiment.json` 和 summary parameters 中增加：
+
+```text
+warm_start_count
+warm_start_seed
+initial_available_memory_ids
+initial_available_pool_sha256
+```
+
+`initial_available_pool_sha256` 只对稳定排序后的 initial IDs 计算，用于快速确认不同 policy 使用相同 warm-start pool。
+
+task-level scheduling 日志继续记录：
+
+```text
+interval_id
+selected_memory_ids
+available_memory_count
+retrieved_memory_ids
+retrieval_scores
+oracle_scores
+```
+
+scheduling comparison 的 controlled keys 增加：
+
+```text
+warm_start_count
+warm_start_seed
+initial_available_pool_sha256
+```
+
+comparison 还应直接检查 `initial_available_memory_ids` 完全一致。若 Random 与 Oracle-Coverage 的 initial pool 不同，必须拒绝生成比较结果。
+
+### 13.8 运行脚本
+
+在 `scripts/run_alfworld_cloud_scheduling.sh` 中增加：
+
+```bash
+WARM_START_COUNT="${WARM_START_COUNT:-0}"
+WARM_START_SEED="${WARM_START_SEED:-42}"
+```
+
+并加入公共 CLI 参数：
+
+```bash
+--warm-start-count "$WARM_START_COUNT"
+--warm-start-seed "$WARM_START_SEED"
+```
+
+warm-start 实验名必须包含 count 和 seed，避免覆盖 cold-start 结果，例如：
+
+```text
+cloud_scheduling_valid_unseen_seed42_n50_b10_c5_warm20_ws7
+```
+
+第一轮 warm-start 对比只需运行：
+
+```text
+Random(seed 1/2/3)
+oracle_coverage
+```
+
+保留 `oracle_sum` 和旧 `oracle_high` CLI，不删除或改变现有 cold-start policy。
+
+### 13.9 Correctness Tests
+
+在现有聚焦测试中增加：
+
+1. 相同 candidate IDs、`warm_start_count` 和 `warm_start_seed` 生成完全相同的 initial IDs；
+2. warm-start IDs 唯一且全部属于 candidate pool；
+3. `warm_start_count=0` 保持现有 cold-start 行为；
+4. warm-start memories 在 interval 0 即可 retrieve；
+5. warm-start memories 从 `pending_ids` 中排除；
+6. Random 和 Oracle-Coverage 在相同 warm-start 参数下使用完全相同的 initial IDs；
+7. scheduler 不会再次选择 warm-start memory；
+8. interval 0 的 `selected_memory_ids=[]` 且 `available_memory_count=W`；
+9. pool 未耗尽时，interval 1 的 available count 为 `W+C`；
+10. warm-start 下 Oracle-Coverage 第一次 selection 使用 available pool 初始化 $d_i^{best}$，所有新选择均记录 marginal-gain score；
+11. comparison 在 initial IDs 或 warm-start pool hash 不一致时拒绝生成；
+12. `W=300` 时 pending pool 为空，scheduler 不激活新 memory，剩余 tasks 仍正常执行。
+
+### 13.10 实验配置
+
+Smoke test 至少需要三个 intervals，以覆盖相对于 warm-start pool 的第一次 scheduling 和相对于扩展 available pool 的第二次 scheduling：
+
+```text
+N = 21
+B = 10
+C = 5
+W = 10 or 20
+Random seeds = 1
+Policies = Random, oracle_coverage
+```
+
+正式实验建议：
+
+```text
+N = 50
+B = 10
+C = 5
+W = fixed warm-start count
+warm_start_seed = fixed seed
+Random scheduler seeds = 1, 2, 3
+Policies = Random, oracle_coverage
+```
+
+由于 Agent inference 存在非确定性，每种 deterministic activation order 后续应运行至少 3–5 次 inference repeats，并使用相同 task order、batch size、模型和服务端条件。
+
+### 13.11 Warm-Start 验收标准
+
+1. 默认 `warm_start_count=0` 时，现有 cold-start 行为和结果命名保持兼容；
+2. 所有 warm-start policies 使用完全相同的 initial IDs；
+3. interval 0 可以检索 warm-start memories；
+4. initial memories 不消耗每 interval 的 construction capacity `C`；
+5. Random 只随机决定剩余 pending memories 的 activation order；
+6. Oracle-Coverage 从 warm-start pool 已提供的 coverage 出发计算 marginal gain；
+7. warm-start memory 不能被 scheduler 重复激活；
+8. 不修改 retrieval threshold、Top-K、`B`、`C` 或 candidate pool；
+9. comparison 能验证 initial pool 完全一致；
+10. cold-start 和 warm-start 使用不同结果目录，不发生覆盖。

@@ -547,6 +547,25 @@ def maybe_write_scheduling_comparison(
         "construction_capacity",
         "scheduled_score_threshold",
     )
+
+    def normalized_warm_start(
+        parameters: dict[str, Any],
+    ) -> tuple[int, int | None, tuple[str, ...], str | None]:
+        count = int(parameters.get("warm_start_count") or 0)
+        memory_ids = tuple(parameters.get("initial_available_memory_ids") or ())
+        if len(memory_ids) != count or len(memory_ids) != len(set(memory_ids)):
+            raise ValueError(
+                "Scheduling summary has an invalid initial available memory pool"
+            )
+        if count == 0:
+            return 0, None, (), None
+        seed = parameters.get("warm_start_seed")
+        pool_sha256 = parameters.get("initial_available_pool_sha256")
+        if seed is None or not pool_sha256:
+            raise ValueError("Warm-start scheduling summary is missing pool metadata")
+        return count, int(seed), memory_ids, str(pool_sha256)
+
+    reference_warm_start = normalized_warm_start(reference_parameters)
     for summary in random_summaries[1:] + oracle_summaries:
         if summary.get("task_ids") != reference.get("task_ids"):
             raise ValueError(
@@ -561,6 +580,10 @@ def maybe_write_scheduling_comparison(
         if mismatches:
             raise ValueError(
                 "Scheduling experiment parameter mismatch: " + ", ".join(mismatches)
+            )
+        if normalized_warm_start(parameters) != reference_warm_start:
+            raise ValueError(
+                "Scheduling conditions use different warm-start memory pools"
             )
 
     random_success_rates = [float(item["success_rate"]) for item in random_summaries]
@@ -610,6 +633,10 @@ def maybe_write_scheduling_comparison(
         "random_success_rate_std": statistics.pstdev(random_success_rates),
         "random_average_steps_mean": random_steps_mean,
         "random_average_steps_std": statistics.pstdev(random_steps),
+        "warm_start_count": reference_warm_start[0],
+        "warm_start_seed": reference_warm_start[1],
+        "initial_available_memory_ids": list(reference_warm_start[2]),
+        "initial_available_pool_sha256": reference_warm_start[3],
         "oracle_runs": oracle_runs,
         # Preserve the original scalar fields for existing result consumers.
         "oracle_condition": primary_oracle["condition"],

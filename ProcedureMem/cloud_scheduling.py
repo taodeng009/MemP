@@ -87,6 +87,36 @@ def candidate_pool_sha256(candidates: Sequence[CandidateMemory]) -> str:
     return hashlib.sha256(encoded).hexdigest()
 
 
+def select_warm_start_ids(
+    candidate_ids: Sequence[str],
+    *,
+    count: int,
+    seed: int,
+) -> tuple[str, ...]:
+    """Select a deterministic initial pool and return it in candidate order."""
+    ids = list(candidate_ids)
+    if len(ids) != len(set(ids)):
+        raise ValueError("Candidate memory IDs must be unique")
+    if count < 0 or count > len(ids):
+        raise ValueError(
+            f"Warm-start count must be between 0 and {len(ids)}, got {count}"
+        )
+    shuffled = list(ids)
+    random.Random(seed).shuffle(shuffled)
+    selected = set(shuffled[:count])
+    return tuple(memory_id for memory_id in ids if memory_id in selected)
+
+
+def memory_id_pool_sha256(memory_ids: Sequence[str]) -> str:
+    """Hash an already-stabilized sequence of memory IDs."""
+    encoded = json.dumps(
+        list(memory_ids),
+        separators=(",", ":"),
+        ensure_ascii=False,
+    ).encode("utf-8")
+    return hashlib.sha256(encoded).hexdigest()
+
+
 def build_interval_batches(
     task_count: int,
     *,

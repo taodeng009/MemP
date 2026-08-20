@@ -42,6 +42,8 @@ from ProcedureMem.cloud_scheduling import (
     build_interval_batches,
     candidate_pool_sha256,
     load_candidate_memories,
+    memory_id_pool_sha256,
+    select_warm_start_ids,
     summarize_scheduling_intervals,
 )
 from ProcedureMem.runtime_config import (
@@ -107,6 +109,8 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--interval-size", type=int)
     parser.add_argument("--construction-capacity", type=int)
     parser.add_argument("--scheduler-seed", type=int, default=42)
+    parser.add_argument("--warm-start-count", type=int)
+    parser.add_argument("--warm-start-seed", type=int)
     parser.add_argument("--candidate-memory-file", type=Path)
     parser.add_argument("--alfworld-data")
     parser.add_argument("--config", default=str(DEFAULT_ALFWORLD_CONFIG))
@@ -141,6 +145,8 @@ def _validate_args(parser: argparse.ArgumentParser, args: argparse.Namespace) ->
         args.interval_size,
         args.construction_capacity,
         args.candidate_memory_file,
+        args.warm_start_count,
+        args.warm_start_seed,
     )
     if args.condition == "cloud_scheduled":
         if args.schedule_policy is None:
@@ -151,6 +157,8 @@ def _validate_args(parser: argparse.ArgumentParser, args: argparse.Namespace) ->
             parser.error(
                 "--construction-capacity must be at least 1 for cloud_scheduled"
             )
+        if args.warm_start_count is not None and args.warm_start_count < 0:
+            parser.error("--warm-start-count cannot be negative")
     elif any(value is not None for value in scheduling_args):
         parser.error(
             "Scheduling arguments are only valid for --condition cloud_scheduled"
@@ -409,6 +417,28 @@ def main(argv: Sequence[str] | None = None) -> int:
         ) = _load_scheduled_memory(args)
     else:
         memory = None
+
+    initial_available_ids: tuple[str, ...] = ()
+    initial_available_pool_sha256 = None
+    warm_start_count = None
+    warm_start_seed = None
+    if args.condition == "cloud_scheduled":
+        warm_start_count = (
+            args.warm_start_count if args.warm_start_count is not None else 0
+        )
+        warm_start_seed = (
+            args.warm_start_seed if args.warm_start_seed is not None else 42
+        )
+        initial_available_ids = select_warm_start_ids(
+            memory.candidate_order,
+            count=warm_start_count,
+            seed=warm_start_seed,
+        )
+        if initial_available_ids:
+            memory.activate(initial_available_ids, interval_id=0)
+        initial_available_pool_sha256 = memory_id_pool_sha256(
+            initial_available_ids
+        )
     reranker = (
         OpenMemReranker(model=args.rerank_model, timeout=args.rerank_timeout)
         if args.condition == "memory_rerank"
@@ -546,6 +576,14 @@ def main(argv: Sequence[str] | None = None) -> int:
         "candidate_memory_count": (
             len(memory.candidates) if args.condition == "cloud_scheduled" else None
         ),
+        "warm_start_count": warm_start_count,
+        "warm_start_seed": warm_start_seed,
+        "initial_available_memory_ids": (
+            list(initial_available_ids)
+            if args.condition == "cloud_scheduled"
+            else None
+        ),
+        "initial_available_pool_sha256": initial_available_pool_sha256,
         "scheduled_score_threshold": (
             memory.score_threshold if args.condition == "cloud_scheduled" else None
         ),
@@ -879,6 +917,10 @@ def main(argv: Sequence[str] | None = None) -> int:
             "policy": args.schedule_policy,
             "interval_size": args.interval_size,
             "construction_capacity": args.construction_capacity,
+            "warm_start_count": warm_start_count,
+            "warm_start_seed": warm_start_seed,
+            "initial_available_memory_ids": list(initial_available_ids),
+            "initial_available_pool_sha256": initial_available_pool_sha256,
             "intervals": summarize_scheduling_intervals(results),
         }
     summary = write_results(

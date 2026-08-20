@@ -87,6 +87,57 @@ class SchedulingComparisonTests(unittest.TestCase):
                 -1.0,
             )
 
+    def test_comparison_rejects_different_warm_start_pools(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            common_parameters = {
+                "condition_mode": "cloud_scheduled",
+                "model": "model",
+                "split": "valid_unseen",
+                "seed": 42,
+                "batch_size": 1,
+                "max_steps": 30,
+                "temperature": 0,
+                "top_p": 1.0,
+                "few_shot": True,
+                "top_k": 3,
+                "manifest_sha256": "manifest",
+                "candidate_pool_sha256": "candidates",
+                "interval_size": 10,
+                "construction_capacity": 5,
+                "scheduled_score_threshold": 0.5,
+                "warm_start_count": 1,
+                "warm_start_seed": 7,
+            }
+            conditions = (
+                ("random", "random", ["mem_0000"], "pool-a"),
+                ("coverage", "oracle_coverage", ["mem_0001"], "pool-b"),
+            )
+            for condition, policy, memory_ids, pool_hash in conditions:
+                condition_dir = root / condition
+                condition_dir.mkdir()
+                parameters = dict(
+                    common_parameters,
+                    schedule_policy=policy,
+                    scheduler_seed=1 if policy == "random" else None,
+                    initial_available_memory_ids=memory_ids,
+                    initial_available_pool_sha256=pool_hash,
+                )
+                summary = {
+                    "condition": condition,
+                    "task_ids": ["task-a"],
+                    "success_rate": 0.5,
+                    "average_steps": 20.0,
+                    "parameters": parameters,
+                }
+                (condition_dir / "summary.json").write_text(
+                    json.dumps(summary),
+                    encoding="utf-8",
+                )
+
+            with self.assertRaisesRegex(ValueError, "warm-start memory pools"):
+                maybe_write_scheduling_comparison(root)
+
 
 class TaskManifestTests(unittest.TestCase):
     def setUp(self):

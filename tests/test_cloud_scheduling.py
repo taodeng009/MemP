@@ -7,6 +7,8 @@ from ProcedureMem.cloud_scheduling import (
     RandomScheduler,
     ScheduledWorkflowMemory,
     build_interval_batches,
+    memory_id_pool_sha256,
+    select_warm_start_ids,
 )
 
 
@@ -52,6 +54,78 @@ def candidates(count=4):
         )
         for index in range(count)
     ]
+
+
+class WarmStartPoolTests(unittest.TestCase):
+    def test_selection_is_deterministic_and_keeps_candidate_order(self):
+        ids = [item.memory_id for item in candidates(10)]
+
+        first = select_warm_start_ids(ids, count=4, seed=17)
+        second = select_warm_start_ids(ids, count=4, seed=17)
+
+        self.assertEqual(first, second)
+        self.assertEqual(len(first), 4)
+        self.assertEqual(
+            first,
+            tuple(memory_id for memory_id in ids if memory_id in first),
+        )
+        self.assertEqual(
+            memory_id_pool_sha256(first),
+            memory_id_pool_sha256(second),
+        )
+
+    def test_zero_count_is_cold_start_and_invalid_counts_are_rejected(self):
+        ids = [item.memory_id for item in candidates(3)]
+
+        self.assertEqual(select_warm_start_ids(ids, count=0, seed=17), ())
+        with self.assertRaises(ValueError):
+            select_warm_start_ids(ids, count=-1, seed=17)
+        with self.assertRaises(ValueError):
+            select_warm_start_ids(ids, count=4, seed=17)
+        with self.assertRaises(ValueError):
+            select_warm_start_ids(["mem_0000", "mem_0000"], count=1, seed=17)
+
+    def test_initial_memories_are_retrievable_and_removed_from_pending(self):
+        memory = ScheduledWorkflowMemory(
+            candidates(3),
+            embedding=object(),
+            retrieve_num=1,
+            score_threshold=0.5,
+            vector_store_factory=fake_store_factory,
+        )
+        initial_ids = select_warm_start_ids(
+            memory.candidate_order,
+            count=2,
+            seed=3,
+        )
+
+        memory.activate(initial_ids, interval_id=0)
+        memory.rebuild_available_index()
+
+        self.assertEqual(memory.available_ids, set(initial_ids))
+        self.assertTrue(set(initial_ids).isdisjoint(memory.pending_ids))
+        for memory_id in initial_ids:
+            query = memory.candidates[memory_id].query
+            retrieved = memory.retrieve(query)
+            self.assertEqual(retrieved[0][0].metadata["memory_id"], memory_id)
+            self.assertEqual(retrieved[0][0].metadata["activated_interval"], 0)
+
+    def test_full_warm_start_exhausts_pending_pool(self):
+        ids = [item.memory_id for item in candidates(5)]
+        memory = ScheduledWorkflowMemory(
+            candidates(5),
+            embedding=object(),
+            retrieve_num=1,
+            vector_store_factory=fake_store_factory,
+        )
+        initial_ids = select_warm_start_ids(ids, count=5, seed=9)
+        memory.activate(initial_ids, interval_id=0)
+
+        self.assertEqual(memory.pending_ids, set())
+        self.assertEqual(
+            RandomScheduler(ids, seed=1).select(memory.pending_ids, 2).memory_ids,
+            (),
+        )
 
 
 class AvailableMemoryTests(unittest.TestCase):
@@ -188,6 +262,12 @@ class SchedulerTests(unittest.TestCase):
         )
 
         self.assertEqual(selection.memory_ids, ("mem_0001", "mem_0003"))
+        self.assertTrue(
+            all(
+                score["score_type"] == "faiss_l2_marginal_gain"
+                for score in selection.oracle_scores.values()
+            )
+        )
         self.assertEqual(
             selection.oracle_scores["mem_0001"]["selection_rank"], 1
         )
