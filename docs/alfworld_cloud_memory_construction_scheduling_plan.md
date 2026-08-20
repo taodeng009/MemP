@@ -735,3 +735,194 @@ Policies = Random, oracle_coverage
 8. 不修改 retrieval threshold、Top-K、`B`、`C` 或 candidate pool；
 9. comparison 能验证 initial pool 完全一致；
 10. cold-start 和 warm-start 使用不同结果目录，不发生覆盖。
+
+## 14. 第三阶段：Greedy Novelty Scheduling
+
+### 14.1 实验目标与策略边界
+
+在现有 controlled activation 框架中新增 `greedy_novelty` policy，用 candidate workflow memory 自身的 `query embedding` 衡量一条 pending memory 相对于当前 available memory pool 能带来的新增语义信息。
+
+该策略是可部署的 task-agnostic baseline：
+
+- 只读取 candidate memory 的 `query`、`memory_id` 和 query embedding；
+- 不读取下一 interval 或其他 future evaluation task queries；
+- 不读取 reward、success、steps、Agent trajectory 或 retrieved memories；
+- 不修改 candidate pool、initial available pool、retrieval threshold、Top-K、`B`、`C` 和 interval 生效语义；
+- 保留现有 `random`、`oracle_sum` 和 `oracle_coverage` 的行为与 CLI 兼容性。
+
+该实验用于回答：在不知道 future tasks 的情况下，优先激活相对当前 available pool 语义更新颖的 memories，是否比 Random 更有效，以及它与使用 privileged future queries 的 `oracle_coverage` 之间还存在多大差距。
+
+### 14.2 Greedy Novelty 定义
+
+设 interval $t$ 结束时当前 available memory 集合为 $\mathcal M_t^C$，本轮已经选中、将在下一 interval 生效的集合为 $\mathcal A_{t,k}$。第 $k$ 次 greedy selection 的 reference set 为：
+
+$$
+\mathcal R_{t,k}
+=
+\mathcal M_t^C \cup \mathcal A_{t,k}
+$$
+
+对每条尚未 available 且本轮尚未选择的 candidate memory $w_j$，使用其 query embedding $e(w_j)$ 计算相对于 reference set 的最近距离：
+
+$$
+n_{j,t,k}
+=
+\min_{w\in\mathcal R_{t,k}}
+d\left(e(w_j),e(w)\right)
+$$
+
+其中 $d$ 使用与现有 FAISS retrieval 一致的 squared L2 distance。距离越大，表示该 candidate query 与当前 reference set 越不相似，能够提供的新增语义信息越多。因此每一步选择：
+
+$$
+w^*
+=
+\arg\max_{w_j} n_{j,t,k}
+$$
+
+选中 $w^*$ 后，将它加入 $\mathcal A_{t,k}$，再重新计算剩余 candidates 相对于扩展 reference set 的最近距离。重复直到选满 $\min(C, |\text{pending}|)$ 条 memory。
+
+这等价于 query-embedding 空间中的 farthest-first traversal。它优化的是 newly selected memories 相对于 already-available pool 及本轮已选 memories 的语义新颖性，而不是对 future evaluation tasks 的预测覆盖。
+
+所有数值相同的情况下使用 `memory_id` 升序作为稳定 tie-break，保证相同输入和配置产生完全一致的 activation order。
+
+### 14.3 Empty Available Pool
+
+当 `available_ids` 为空且本轮尚未选择任何 memory 时，没有 reference embedding，所有 pending candidates 的 novelty 在定义上并列。此时：
+
+1. 按稳定 `memory_id` 选择第一条 memory；
+2. 将其作为本轮第一个 reference；
+3. 后续选择恢复正常的最大 nearest-distance greedy 过程。
+
+第一条 memory 的 novelty value 记为 `null`，并记录：
+
+```text
+score_type = empty_reference_tie_break
+higher_is_better = null
+```
+
+该规则只用于确定性的 cold-start fallback。`greedy_novelty` 的主要对比场景为 warm start，此时直接以所有 initial available memories 作为初始 reference set。
+
+### 14.4 Embedding 与距离缓存
+
+复用现有 BGE embedding 模型和 candidate memory query embeddings，不引入新的 embedding 模型或相似度口径。加载 300 条 candidate memories 后，一次性计算或缓存 candidate-to-candidate squared L2 distance matrix：
+
+```text
+distance[candidate_memory_id][reference_memory_id]
+```
+
+300 条 memories 的完整矩阵规模较小，可以在单次实验进程中驻留内存。scheduler 仅在每个 interval 边界读取该矩阵，不需要重复调用 embedding 模型，也不需要访问 evaluation task query manifest。
+
+### 14.5 Scheduler 与 Runner 修改
+
+新增 `GreedyNoveltyScheduler`，接口至少接收：
+
+```text
+pending_ids
+available_ids
+construction_capacity C
+candidate_query_distance_matrix
+```
+
+并返回按 greedy 顺序排列的 `selected_memory_ids` 以及对应的 novelty score metadata。
+
+Runner 增加：
+
+```bash
+--schedule-policy greedy_novelty
+```
+
+当 policy 为 `greedy_novelty` 时：
+
+- 不加载或冻结 next-interval evaluation queries；
+- interval 内 available snapshot 保持固定；
+- interval 结束后从 `pending_ids` 中最多选择 `C` 条；
+- 新选择的 memories 仍只从下一 interval 开始生效；
+- candidate pool 耗尽后继续执行剩余 evaluation tasks。
+
+### 14.6 最小日志
+
+保持现有 task-level 日志字段不变，并为 scheduler selection 增加可选的通用字段：
+
+```text
+scheduler_scores
+```
+
+`greedy_novelty` 对每条 selected memory 至少记录：
+
+```text
+memory_id
+selection_rank
+score_type                 # nearest_reference_faiss_l2_distance
+score_value                # 越大越新颖；empty reference 时为 null
+higher_is_better           # true；empty reference 时为 null
+nearest_reference_memory_id
+```
+
+现有 `oracle_scores` 字段继续保留，避免影响已有 Oracle 结果和分析脚本。第一阶段不要求迁移旧日志。
+
+### 14.7 Comparison 与运行脚本
+
+正式对比保留完全相同的 candidate memories、evaluation task manifest、task order、warm-start pool、`B`、`C`、retrieval 配置、Agent 配置和服务端条件，运行：
+
+```text
+Random（多个 scheduler seeds）
+greedy_novelty
+oracle_coverage
+```
+
+重点报告：
+
+- `greedy_novelty` vs Random：task-agnostic novelty activation 是否带来收益；
+- `oracle_coverage` vs `greedy_novelty`：future-query privileged information 带来的上界增益；
+- overall SR、average execution steps、interval SR、cumulative SR 和 retrieved memory IDs。
+
+运行脚本只需将 `greedy_novelty` 加入 policy 列表，不改变现有 Oracle policy 环境变量和默认兼容逻辑。
+
+### 14.8 Correctness Tests
+
+新增以下关键测试：
+
+1. `greedy_novelty` 不读取 future evaluation task queries 或 execution outcomes；
+2. warm start 下第一条选择是与整个 current available pool 最近距离最大的 pending memory；
+3. 每选择一条 memory 后，后续 novelty 都相对于 available pool 与本轮已选集合的并集重新计算；
+4. 使用 squared L2 distance 时 score 越大优先级越高；
+5. score 并列时按稳定 `memory_id` 顺序选择；
+6. empty available pool 时第一条按稳定 ID 选择，后续恢复 farthest-first；
+7. scheduler 每次最多选择 `C` 条，不选择已 available memory，不在同一轮重复选择；
+8. 相同 candidate embeddings、available IDs 和参数产生完全一致的 selection order；
+9. 新激活 memory 只能从下一 interval retrieve，batch 不跨 interval；
+10. `random`、`oracle_sum` 和 `oracle_coverage` 的现有行为及日志保持兼容。
+
+### 14.9 建议实验配置与验收标准
+
+Smoke test：
+
+```text
+N = 21
+B = 10
+C = 5
+W = 20
+warm_start_seed = 7
+Policies = Random, greedy_novelty, oracle_coverage
+```
+
+正式实验：
+
+```text
+N = 50
+B = 10
+C = 5
+W = fixed warm-start count
+warm_start_seed = fixed seed
+Random scheduler seeds = 1, 2, 3
+Policies = Random, greedy_novelty, oracle_coverage
+```
+
+验收标准：
+
+1. `greedy_novelty` 只依赖 candidate query embedding 和当前 controlled activation state；
+2. 所有 policy 使用完全相同的 warm-start initial available pool；
+3. novelty selection 正确包含 already-available pool 和本轮已选 memories 两部分 reference；
+4. policy 不改变 retrieval 与 interval runner 的既有语义；
+5. 旧 policy 的 CLI、结果目录和日志仍可正常使用；
+6. 结果能够直接比较 Random、deployable novelty baseline 与 Oracle upper-bound baseline。

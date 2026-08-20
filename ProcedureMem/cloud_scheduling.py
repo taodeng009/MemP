@@ -26,6 +26,7 @@ class ScheduleSelection:
     memory_ids: tuple[str, ...]
     oracle_distances: dict[str, float] | None = None
     oracle_scores: dict[str, dict[str, Any]] | None = None
+    scheduler_scores: dict[str, dict[str, Any]] | None = None
 
 
 def load_candidate_memories(
@@ -175,6 +176,10 @@ class ScheduledWorkflowMemory:
         self.activation_intervals: dict[str, int] = {}
         self.vector_store = None
         self._candidate_embeddings: dict[str, np.ndarray] = {}
+        self._candidate_distance_matrix: np.ndarray | None = None
+        self._candidate_index = {
+            memory_id: index for index, memory_id in enumerate(self.candidate_order)
+        }
 
     @property
     def pending_ids(self) -> set[str]:
@@ -258,6 +263,77 @@ class ScheduledWorkflowMemory:
             for memory_id, distances in distance_matrix.items()
         }
 
+    def _ensure_candidate_embeddings(self, memory_ids: Iterable[str]) -> None:
+        requested = set(memory_ids)
+        unknown = requested - set(self.candidates)
+        if unknown:
+            raise ValueError(
+                "Unknown candidate memory IDs: " + ", ".join(sorted(unknown)[:5])
+            )
+        missing_ids = [
+            memory_id
+            for memory_id in self.candidate_order
+            if memory_id in requested and memory_id not in self._candidate_embeddings
+        ]
+        if not missing_ids:
+            return
+        vectors = self.embedding.embed_documents(
+            [self.candidates[memory_id].query for memory_id in missing_ids]
+        )
+        if len(vectors) != len(missing_ids):
+            raise ValueError("Embedding model returned the wrong candidate vector count")
+        self._candidate_embeddings.update(
+            {
+                memory_id: np.asarray(vector, dtype=np.float32)
+                for memory_id, vector in zip(missing_ids, vectors)
+            }
+        )
+
+    def candidate_query_distance_matrix(
+        self,
+        memory_ids: Iterable[str] | None = None,
+    ) -> dict[str, dict[str, float]]:
+        """Return cached candidate-query squared-L2 distances."""
+        requested = (
+            set(self.candidate_order) if memory_ids is None else set(memory_ids)
+        )
+        unknown = requested - set(self.candidates)
+        if unknown:
+            raise ValueError(
+                "Unknown candidate memory IDs: " + ", ".join(sorted(unknown)[:5])
+            )
+        ordered_ids = [
+            memory_id for memory_id in self.candidate_order if memory_id in requested
+        ]
+        if not ordered_ids:
+            return {}
+
+        if self._candidate_distance_matrix is None:
+            self._ensure_candidate_embeddings(self.candidate_order)
+            vectors = np.asarray(
+                [
+                    self._candidate_embeddings[memory_id]
+                    for memory_id in self.candidate_order
+                ],
+                dtype=np.float32,
+            )
+            squared_norms = np.sum(vectors * vectors, axis=1, keepdims=True)
+            distances = squared_norms + squared_norms.T - 2.0 * (vectors @ vectors.T)
+            self._candidate_distance_matrix = np.maximum(distances, 0.0)
+
+        return {
+            memory_id: {
+                reference_id: float(
+                    self._candidate_distance_matrix[
+                        self._candidate_index[memory_id],
+                        self._candidate_index[reference_id],
+                    ]
+                )
+                for reference_id in ordered_ids
+            }
+            for memory_id in ordered_ids
+        }
+
     def oracle_distance_matrix(
         self,
         next_interval_queries: Sequence[str],
@@ -274,20 +350,7 @@ class ScheduledWorkflowMemory:
         if not ordered_ids:
             return {}
 
-        missing_ids = [
-            memory_id for memory_id in ordered_ids
-            if memory_id not in self._candidate_embeddings
-        ]
-        if missing_ids:
-            vectors = self.embedding.embed_documents(
-                [self.candidates[memory_id].query for memory_id in missing_ids]
-            )
-            self._candidate_embeddings.update(
-                {
-                    memory_id: np.asarray(vector, dtype=np.float32)
-                    for memory_id, vector in zip(missing_ids, vectors)
-                }
-            )
+        self._ensure_candidate_embeddings(ordered_ids)
 
         query_vectors = np.asarray(
             [self.embedding.embed_query(query) for query in queries],
@@ -316,6 +379,98 @@ class RandomScheduler:
             memory_id for memory_id in self.order if memory_id in pending
         )[:capacity]
         return ScheduleSelection(memory_ids=selected)
+
+
+class GreedyNoveltyScheduler:
+    """Greedily select candidate queries farthest from the current reference set."""
+
+    def select(
+        self,
+        pending_ids: Iterable[str],
+        capacity: int,
+        *,
+        available_ids: Iterable[str],
+        distance_matrix: Mapping[str, Mapping[str, float]],
+    ) -> ScheduleSelection:
+        if capacity < 1:
+            raise ValueError("Construction capacity must be at least 1")
+        pending = set(pending_ids)
+        if not pending:
+            return ScheduleSelection(memory_ids=(), scheduler_scores={})
+        available = set(available_ids)
+        overlap = pending & available
+        if overlap:
+            raise ValueError(
+                "Available and pending memory IDs overlap: "
+                + ", ".join(sorted(overlap)[:5])
+            )
+
+        scored_ids = pending | available
+        if set(distance_matrix) != scored_ids:
+            missing = sorted(scored_ids - set(distance_matrix))
+            unknown = sorted(set(distance_matrix) - scored_ids)
+            raise ValueError(
+                "Novelty distance matrix returned the wrong memories: "
+                f"missing={missing[:5]}, unknown={unknown[:5]}"
+            )
+        for memory_id in scored_ids:
+            references = set(distance_matrix[memory_id])
+            if references != scored_ids:
+                missing = sorted(scored_ids - references)
+                unknown = sorted(references - scored_ids)
+                raise ValueError(
+                    "Novelty distance matrix returned the wrong references for "
+                    f"{memory_id}: missing={missing[:5]}, unknown={unknown[:5]}"
+                )
+
+        selected: list[str] = []
+        scores: dict[str, dict[str, Any]] = {}
+        references = set(available)
+        target_count = min(capacity, len(pending))
+
+        if not references:
+            first_id = min(pending)
+            selected.append(first_id)
+            references.add(first_id)
+            scores[first_id] = {
+                "value": None,
+                "score_type": "empty_reference_tie_break",
+                "higher_is_better": None,
+                "selection_rank": 1,
+                "nearest_reference_memory_id": None,
+            }
+
+        while len(selected) < target_count:
+            remaining = pending - set(selected)
+            nearest: dict[str, tuple[float, str]] = {
+                memory_id: min(
+                    (
+                        float(distance_matrix[memory_id][reference_id]),
+                        reference_id,
+                    )
+                    for reference_id in references
+                )
+                for memory_id in remaining
+            }
+            next_id = min(
+                remaining,
+                key=lambda memory_id: (-nearest[memory_id][0], memory_id),
+            )
+            novelty, nearest_reference_id = nearest[next_id]
+            selected.append(next_id)
+            scores[next_id] = {
+                "value": novelty,
+                "score_type": "nearest_reference_faiss_l2_distance",
+                "higher_is_better": True,
+                "selection_rank": len(selected),
+                "nearest_reference_memory_id": nearest_reference_id,
+            }
+            references.add(next_id)
+
+        return ScheduleSelection(
+            memory_ids=tuple(selected),
+            scheduler_scores=scores,
+        )
 
 
 class OracleHighScheduler:

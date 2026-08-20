@@ -15,6 +15,7 @@ MAX_STEPS="${MAX_STEPS:-30}"
 TEMPERATURE="${TEMPERATURE:-0}"
 TOP_K="${TOP_K:-3}"
 read -r -a RANDOM_SEEDS_ARRAY <<< "${RANDOM_SEEDS:-1 2 3}"
+read -r -a NOVELTY_POLICIES_ARRAY <<< "${NOVELTY_POLICIES:-greedy_novelty}"
 DEFAULT_ORACLE_POLICIES="oracle_sum oracle_coverage"
 if [[ "$WARM_START_COUNT" != "0" ]]; then
   DEFAULT_ORACLE_POLICIES="oracle_coverage"
@@ -61,6 +62,13 @@ for scheduler_seed in "${RANDOM_SEEDS_ARRAY[@]}"; do
     --schedule-policy random \
     --scheduler-seed "$scheduler_seed" \
     --condition-name "cloud_scheduled_random_seed${scheduler_seed}" \
+    "${COMMON_ARGS[@]}"
+done
+
+for novelty_policy in "${NOVELTY_POLICIES_ARRAY[@]}"; do
+  python -m ProcedureMem.eval_alfworld \
+    --schedule-policy "$novelty_policy" \
+    --condition-name "cloud_scheduled_${novelty_policy}" \
     "${COMMON_ARGS[@]}"
 done
 

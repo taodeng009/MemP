@@ -497,7 +497,7 @@ def maybe_write_memory_rerank_comparison(
 def maybe_write_scheduling_comparison(
     experiment_dir: str | Path,
 ) -> dict[str, Any] | None:
-    """Write Random versus available Oracle scheduling comparisons."""
+    """Write Random versus novelty and available Oracle comparisons."""
     root = Path(experiment_dir)
     summaries = []
     if not root.is_dir():
@@ -512,20 +512,31 @@ def maybe_write_scheduling_comparison(
         item for item in summaries
         if item.get("parameters", {}).get("schedule_policy") == "random"
     ]
-    oracle_summaries = [
+    scheduled_policy_summaries = [
         item
         for item in summaries
         if item.get("parameters", {}).get("schedule_policy")
+        in {"greedy_novelty", "oracle_high", "oracle_sum", "oracle_coverage"}
+    ]
+    oracle_summaries = [
+        item
+        for item in scheduled_policy_summaries
+        if item.get("parameters", {}).get("schedule_policy")
         in {"oracle_high", "oracle_sum", "oracle_coverage"}
+    ]
+    novelty_summaries = [
+        item
+        for item in scheduled_policy_summaries
+        if item.get("parameters", {}).get("schedule_policy") == "greedy_novelty"
     ]
     if not random_summaries or not oracle_summaries:
         return None
-    oracle_policies = [
+    scheduled_policies = [
         item.get("parameters", {}).get("schedule_policy")
-        for item in oracle_summaries
+        for item in scheduled_policy_summaries
     ]
-    if len(oracle_policies) != len(set(oracle_policies)):
-        raise ValueError("Scheduling comparison requires one summary per Oracle policy")
+    if len(scheduled_policies) != len(set(scheduled_policies)):
+        raise ValueError("Scheduling comparison requires one summary per policy")
 
     reference = random_summaries[0]
     reference_parameters = reference["parameters"]
@@ -566,7 +577,7 @@ def maybe_write_scheduling_comparison(
         return count, int(seed), memory_ids, str(pool_sha256)
 
     reference_warm_start = normalized_warm_start(reference_parameters)
-    for summary in random_summaries[1:] + oracle_summaries:
+    for summary in random_summaries[1:] + scheduled_policy_summaries:
         if summary.get("task_ids") != reference.get("task_ids"):
             raise ValueError(
                 "Scheduling conditions use different task IDs or task order"
@@ -590,25 +601,28 @@ def maybe_write_scheduling_comparison(
     random_steps = [float(item["average_steps"]) for item in random_summaries]
     random_sr_mean = statistics.fmean(random_success_rates)
     random_steps_mean = statistics.fmean(random_steps)
+
+    def versus_random(item: dict[str, Any]) -> dict[str, Any]:
+        success_rate = float(item["success_rate"])
+        average_steps = float(item["average_steps"])
+        return {
+            "policy": item["parameters"]["schedule_policy"],
+            "condition": item["condition"],
+            "success_rate": success_rate,
+            "average_steps": average_steps,
+            "minus_random_success_rate": success_rate - random_sr_mean,
+            "minus_random_success_rate_percentage_points": (
+                success_rate - random_sr_mean
+            )
+            * 100,
+            "minus_random_average_steps": average_steps - random_steps_mean,
+        }
+
     oracle_runs = []
     for oracle in oracle_summaries:
-        oracle_sr = float(oracle["success_rate"])
-        oracle_steps = float(oracle["average_steps"])
-        oracle_runs.append(
-            {
-                "policy": oracle["parameters"]["schedule_policy"],
-                "condition": oracle["condition"],
-                "success_rate": oracle_sr,
-                "average_steps": oracle_steps,
-                "minus_random_success_rate": oracle_sr - random_sr_mean,
-                "minus_random_success_rate_percentage_points": (
-                    oracle_sr - random_sr_mean
-                )
-                * 100,
-                "minus_random_average_steps": oracle_steps - random_steps_mean,
-            }
-        )
+        oracle_runs.append(versus_random(oracle))
     oracle_runs.sort(key=lambda item: item["policy"])
+    novelty_runs = [versus_random(item) for item in novelty_summaries]
     primary_policy_order = ("oracle_high", "oracle_sum", "oracle_coverage")
     primary_oracle = next(
         item
@@ -637,6 +651,7 @@ def maybe_write_scheduling_comparison(
         "warm_start_seed": reference_warm_start[1],
         "initial_available_memory_ids": list(reference_warm_start[2]),
         "initial_available_pool_sha256": reference_warm_start[3],
+        "novelty_runs": novelty_runs,
         "oracle_runs": oracle_runs,
         # Preserve the original scalar fields for existing result consumers.
         "oracle_condition": primary_oracle["condition"],
@@ -667,6 +682,23 @@ def maybe_write_scheduling_comparison(
                 * 100,
                 "oracle_coverage_minus_oracle_sum_average_steps": (
                     oracle_coverage["average_steps"] - oracle_sum["average_steps"]
+                ),
+            }
+        )
+    if novelty_runs and "oracle_coverage" in by_policy:
+        novelty = novelty_runs[0]
+        oracle_coverage = by_policy["oracle_coverage"]
+        comparison.update(
+            {
+                "oracle_coverage_minus_greedy_novelty_success_rate": (
+                    oracle_coverage["success_rate"] - novelty["success_rate"]
+                ),
+                "oracle_coverage_minus_greedy_novelty_success_rate_percentage_points": (
+                    oracle_coverage["success_rate"] - novelty["success_rate"]
+                )
+                * 100,
+                "oracle_coverage_minus_greedy_novelty_average_steps": (
+                    oracle_coverage["average_steps"] - novelty["average_steps"]
                 ),
             }
         )

@@ -2,6 +2,7 @@ import unittest
 
 from ProcedureMem.cloud_scheduling import (
     CandidateMemory,
+    GreedyNoveltyScheduler,
     OracleCoverageScheduler,
     OracleHighScheduler,
     RandomScheduler,
@@ -196,6 +197,82 @@ class SchedulerTests(unittest.TestCase):
         self.assertEqual(first.memory_ids, ("mem_0000",))
         self.assertEqual(second.memory_ids, ("mem_0002",))
         self.assertEqual(first.oracle_distances["mem_0000"], 0.0)
+
+    def test_greedy_novelty_uses_available_pool_and_updates_references(self):
+        scheduler = GreedyNoveltyScheduler()
+        positions = {
+            "mem_0000": 0.0,
+            "mem_0001": 10.0,
+            "mem_0002": 11.0,
+            "mem_0003": 20.0,
+        }
+        distance_matrix = {
+            memory_id: {
+                reference_id: (position - positions[reference_id]) ** 2
+                for reference_id in positions
+            }
+            for memory_id, position in positions.items()
+        }
+
+        selection = scheduler.select(
+            {"mem_0001", "mem_0002", "mem_0003"},
+            2,
+            available_ids={"mem_0000"},
+            distance_matrix=distance_matrix,
+        )
+
+        self.assertEqual(selection.memory_ids, ("mem_0003", "mem_0001"))
+        self.assertEqual(selection.scheduler_scores["mem_0003"]["value"], 400.0)
+        self.assertEqual(
+            selection.scheduler_scores["mem_0003"][
+                "nearest_reference_memory_id"
+            ],
+            "mem_0000",
+        )
+        self.assertEqual(selection.scheduler_scores["mem_0001"]["value"], 100.0)
+        self.assertTrue(
+            selection.scheduler_scores["mem_0001"]["higher_is_better"]
+        )
+
+    def test_greedy_novelty_cold_start_and_ties_use_stable_ids(self):
+        scheduler = GreedyNoveltyScheduler()
+        ids = {"mem_0002", "mem_0001", "mem_0000"}
+        distance_matrix = {
+            memory_id: {
+                reference_id: float(memory_id != reference_id)
+                for reference_id in ids
+            }
+            for memory_id in ids
+        }
+
+        selection = scheduler.select(
+            ids,
+            2,
+            available_ids=set(),
+            distance_matrix=distance_matrix,
+        )
+
+        self.assertEqual(selection.memory_ids, ("mem_0000", "mem_0001"))
+        self.assertIsNone(selection.scheduler_scores["mem_0000"]["value"])
+        self.assertEqual(
+            selection.scheduler_scores["mem_0000"]["score_type"],
+            "empty_reference_tie_break",
+        )
+
+    def test_candidate_query_distance_matrix_uses_squared_l2(self):
+        memory = ScheduledWorkflowMemory(
+            candidates(3),
+            embedding=FakeEmbedding(),
+            retrieve_num=1,
+        )
+
+        first = memory.candidate_query_distance_matrix(memory.candidate_order)
+        second = memory.candidate_query_distance_matrix(memory.candidate_order)
+
+        self.assertEqual(first, second)
+        self.assertEqual(first["mem_0000"]["mem_0002"], 400.0)
+        self.assertEqual(first["mem_0001"]["mem_0002"], 100.0)
+        self.assertEqual(first["mem_0001"]["mem_0001"], 0.0)
 
     def test_oracle_coverage_uses_available_pool_as_marginal_baseline(self):
         scheduler = OracleCoverageScheduler()

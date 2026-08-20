@@ -27,7 +27,7 @@ class FakeDocument:
 
 
 class SchedulingComparisonTests(unittest.TestCase):
-    def test_comparison_supports_sum_and_coverage_oracles(self):
+    def test_comparison_supports_novelty_sum_and_coverage_oracles(self):
         with tempfile.TemporaryDirectory() as temporary:
             root = Path(temporary)
             common_parameters = {
@@ -50,6 +50,7 @@ class SchedulingComparisonTests(unittest.TestCase):
             conditions = (
                 ("random_1", "random", 0.25, 25.0, 1),
                 ("random_2", "random", 0.50, 20.0, 2),
+                ("greedy_novelty", "greedy_novelty", 0.60, 20.0, None),
                 ("oracle_sum", "oracle_sum", 0.50, 19.0, None),
                 ("oracle_coverage", "oracle_coverage", 0.75, 18.0, None),
             )
@@ -76,6 +77,13 @@ class SchedulingComparisonTests(unittest.TestCase):
 
             self.assertIsNotNone(comparison)
             self.assertEqual(len(comparison["oracle_runs"]), 2)
+            self.assertEqual(len(comparison["novelty_runs"]), 1)
+            self.assertAlmostEqual(
+                comparison["novelty_runs"][0][
+                    "minus_random_success_rate_percentage_points"
+                ],
+                22.5,
+            )
             self.assertEqual(
                 comparison[
                     "oracle_coverage_minus_oracle_sum_success_rate_percentage_points"
@@ -85,6 +93,12 @@ class SchedulingComparisonTests(unittest.TestCase):
             self.assertEqual(
                 comparison["oracle_coverage_minus_oracle_sum_average_steps"],
                 -1.0,
+            )
+            self.assertAlmostEqual(
+                comparison[
+                    "oracle_coverage_minus_greedy_novelty_success_rate_percentage_points"
+                ],
+                15.0,
             )
 
     def test_comparison_rejects_different_warm_start_pools(self):

@@ -35,6 +35,7 @@ from ProcedureMem.alfworld_experiment import (
     write_results,
 )
 from ProcedureMem.cloud_scheduling import (
+    GreedyNoveltyScheduler,
     OracleCoverageScheduler,
     OracleSumScheduler,
     RandomScheduler,
@@ -104,7 +105,13 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--trajectory-file", type=Path, default=DEFAULT_TRAJECTORY_PATH)
     parser.add_argument(
         "--schedule-policy",
-        choices=("random", "oracle_high", "oracle_sum", "oracle_coverage"),
+        choices=(
+            "random",
+            "greedy_novelty",
+            "oracle_high",
+            "oracle_sum",
+            "oracle_coverage",
+        ),
     )
     parser.add_argument("--interval-size", type=int)
     parser.add_argument("--construction-capacity", type=int)
@@ -472,6 +479,8 @@ def main(argv: Sequence[str] | None = None) -> int:
                 memory.candidate_order,
                 seed=args.scheduler_seed,
             )
+        elif args.schedule_policy == "greedy_novelty":
+            scheduler = GreedyNoveltyScheduler()
         elif args.schedule_policy == "oracle_coverage":
             frozen_task_queries = _freeze_task_queries(
                 [task["task_id"] for task in manifest["tasks"]],
@@ -602,6 +611,18 @@ def main(argv: Sequence[str] | None = None) -> int:
             and args.schedule_policy in {"oracle_high", "oracle_sum"}
             else None
         ),
+        "scheduler_score_type": (
+            "nearest_reference_faiss_l2_distance"
+            if args.condition == "cloud_scheduled"
+            and args.schedule_policy == "greedy_novelty"
+            else None
+        ),
+        "scheduler_higher_is_better": (
+            True
+            if args.condition == "cloud_scheduled"
+            and args.schedule_policy == "greedy_novelty"
+            else None
+        ),
     }
     write_json(condition_dir / "experiment.json", parameters)
     examples = json.loads(DEFAULT_EXAMPLES_PATH.read_text(encoding="utf-8"))
@@ -627,6 +648,9 @@ def main(argv: Sequence[str] | None = None) -> int:
 
     selected_by_interval: dict[int, list[str]] = {0: []}
     oracle_scores_by_interval: dict[int, dict[str, dict[str, Any]] | None] = {
+        0: None
+    }
+    scheduler_scores_by_interval: dict[int, dict[str, dict[str, Any]] | None] = {
         0: None
     }
     interval_available_count = 0
@@ -800,9 +824,13 @@ def main(argv: Sequence[str] | None = None) -> int:
                         ],
                         "oracle_scores": (
                             oracle_scores_by_interval[interval_id]
-                            if args.schedule_policy != "random"
+                            if args.schedule_policy
+                            in {"oracle_high", "oracle_sum", "oracle_coverage"}
                             else None
                         ),
+                        "scheduler_scores": scheduler_scores_by_interval[
+                            interval_id
+                        ],
                     }
                 )
             result.update(result_fields)
@@ -819,6 +847,16 @@ def main(argv: Sequence[str] | None = None) -> int:
                 selection = scheduler.select(
                     memory.pending_ids,
                     args.construction_capacity,
+                )
+            elif args.schedule_policy == "greedy_novelty":
+                scored_ids = memory.pending_ids | memory.available_ids
+                selection = scheduler.select(
+                    memory.pending_ids,
+                    args.construction_capacity,
+                    available_ids=memory.available_ids,
+                    distance_matrix=memory.candidate_query_distance_matrix(
+                        scored_ids
+                    ),
                 )
             elif args.schedule_policy == "oracle_coverage":
                 next_interval_end = min(
@@ -864,6 +902,9 @@ def main(argv: Sequence[str] | None = None) -> int:
             else:
                 oracle_scores = None
             oracle_scores_by_interval[next_interval_id] = oracle_scores
+            scheduler_scores_by_interval[next_interval_id] = (
+                selection.scheduler_scores
+            )
 
     rerank_metadata = None
     if args.condition == "memory_rerank":
@@ -956,6 +997,13 @@ def main(argv: Sequence[str] | None = None) -> int:
         )
     scheduling_comparison = maybe_write_scheduling_comparison(experiment_dir)
     if scheduling_comparison:
+        for novelty_run in scheduling_comparison.get("novelty_runs", []):
+            print(
+                f"{novelty_run['policy']} vs Random mean: "
+                f"{novelty_run['minus_random_success_rate_percentage_points']:+.2f} "
+                "percentage points; average-steps delta "
+                f"{novelty_run['minus_random_average_steps']:+.2f}"
+            )
         for oracle_run in scheduling_comparison.get("oracle_runs", []):
             print(
                 f"{oracle_run['policy']} vs Random mean: "
@@ -971,6 +1019,19 @@ def main(argv: Sequence[str] | None = None) -> int:
                 "oracle_coverage vs oracle_sum: "
                 f"{coverage_delta:+.2f} percentage points; average-steps delta "
                 f"{scheduling_comparison['oracle_coverage_minus_oracle_sum_average_steps']:+.2f}"
+            )
+        coverage_novelty_delta = scheduling_comparison.get(
+            "oracle_coverage_minus_greedy_novelty_success_rate_percentage_points"
+        )
+        if coverage_novelty_delta is not None:
+            coverage_novelty_steps_delta = scheduling_comparison[
+                "oracle_coverage_minus_greedy_novelty_average_steps"
+            ]
+            print(
+                "oracle_coverage vs greedy_novelty: "
+                f"{coverage_novelty_delta:+.2f} percentage points; "
+                "average-steps delta "
+                f"{coverage_novelty_steps_delta:+.2f}"
             )
     return 0
 
