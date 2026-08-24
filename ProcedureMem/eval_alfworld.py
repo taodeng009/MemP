@@ -192,9 +192,9 @@ def _validate_args(parser: argparse.ArgumentParser, args: argparse.Namespace) ->
             )
         if args.interval_size is None or args.interval_size < 1:
             parser.error("--interval-size must be at least 1 for online_construction")
-        if args.construction_capacity is None or args.construction_capacity < 1:
+        if args.construction_capacity is None or args.construction_capacity < 0:
             parser.error(
-                "--construction-capacity must be at least 1 for online_construction"
+                "--construction-capacity cannot be negative for online_construction"
             )
         warm_count = args.warm_start_count if args.warm_start_count is not None else 0
         if warm_count < 0:

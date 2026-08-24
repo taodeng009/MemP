@@ -180,8 +180,8 @@ class OnlineConstructionController:
     ) -> None:
         if policy not in ONLINE_POLICIES:
             raise ValueError(f"Unsupported online scheduling policy: {policy}")
-        if capacity < 1:
-            raise ValueError("Construction capacity must be at least 1")
+        if capacity < 0:
+            raise ValueError("Construction capacity cannot be negative")
         self.memory = memory
         self.policy = policy
         self.capacity = capacity
@@ -258,6 +258,10 @@ class OnlineConstructionController:
 
     def _selection(self) -> ScheduleSelection:
         pending_ids = self.queue.pending_ids
+        # Capacity zero is the warm-start-only control: successful trajectories
+        # are still admitted and logged, but no online memory is constructed.
+        if self.capacity == 0:
+            return ScheduleSelection(memory_ids=())
         if self.policy != "greedy_novelty":
             return self.scheduler.select(pending_ids, self.capacity)
         available_queries = self._available_queries()

@@ -188,6 +188,23 @@ class ControllerTests(unittest.TestCase):
         self.assertEqual(len(controller.construction_events), 0)
         self.assertEqual(len(controller.queue), 1)
 
+    def test_zero_capacity_admits_trajectories_without_construction(self):
+        memory = FakeMemory()
+        controller = OnlineConstructionController(
+            memory=memory, policy="greedy_novelty", capacity=0
+        )
+        arrived = controller.admit_results([result(0), result(1)], interval_id=0)
+
+        event = controller.construct(interval_id=0)
+
+        self.assertEqual(len(arrived), 2)
+        self.assertEqual(event["selected_queue_ids"], [])
+        self.assertEqual(event["pending_queue_ids_after_construction"], arrived)
+        self.assertEqual(len(controller.queue), 2)
+        self.assertEqual(controller.construction_events, [])
+        self.assertEqual(controller.staged_documents, [])
+        self.assertEqual(memory.documents, [])
+
 
 class WarmStartTests(unittest.TestCase):
     def test_same_file_count_and_seed_load_same_initial_pool(self):
