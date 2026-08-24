@@ -12,6 +12,7 @@ from ProcedureMem.alfworld_experiment import (
     load_json,
     manifest_sha256,
     maybe_write_scheduling_comparison,
+    maybe_write_online_construction_comparison,
     retrieval_records,
     reranked_retrieval_records,
     summarize_results,
@@ -27,6 +28,99 @@ class FakeDocument:
 
 
 class SchedulingComparisonTests(unittest.TestCase):
+    def test_online_comparison_uses_fifo_and_greedy_with_matching_controls(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            common = {
+                "condition_mode": "online_construction",
+                "model": "model",
+                "agent_api_base_url": "api",
+                "embedding_model": "embedding",
+                "split": "valid_unseen",
+                "seed": 42,
+                "batch_size": 1,
+                "max_steps": 30,
+                "temperature": 0,
+                "top_p": 1.0,
+                "few_shot": True,
+                "top_k": 3,
+                "score_threshold": 0.5,
+                "manifest_sha256": "manifest",
+                "interval_size": 10,
+                "construction_capacity": 2,
+                "construction_method": "direct",
+                "arrival_policy": "success_only",
+                "memory_build_model": "builder",
+                "warm_start_count": 0,
+                "warm_start_seed": 42,
+                "warm_start_memory_file": None,
+                "initial_available_memory_ids": [],
+            }
+            for policy, success_rate, steps in (
+                ("fifo", 0.4, 22.0),
+                ("greedy_novelty", 0.5, 20.0),
+            ):
+                directory = root / policy
+                directory.mkdir()
+                summary = {
+                    "condition": f"online_construction_{policy}",
+                    "task_ids": ["a", "b"],
+                    "success_rate": success_rate,
+                    "average_steps": steps,
+                    "parameters": dict(common, schedule_policy=policy),
+                    "online_construction_summary": {
+                        "arrival_count": 3,
+                        "construction_success_count": 2,
+                        "construction_failure_count": 0,
+                        "final_queue_length": 1,
+                        "waiting_intervals_mean": 0.5,
+                        "online_retrieval_count": 4,
+                        "retrieved_constructed_memory_count": 2,
+                    },
+                }
+                (directory / "summary.json").write_text(
+                    json.dumps(summary), encoding="utf-8"
+                )
+
+            comparison = maybe_write_online_construction_comparison(root)
+
+            self.assertIsNotNone(comparison)
+            self.assertAlmostEqual(
+                comparison["greedy_minus_fifo_success_rate_percentage_points"],
+                10.0,
+            )
+            self.assertEqual(comparison["greedy_minus_fifo_average_steps"], -2.0)
+
+    def test_online_comparison_rejects_different_initial_ids(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            for policy, initial_ids in (
+                ("fifo", ["mem_0000"]),
+                ("greedy_novelty", ["mem_0001"]),
+            ):
+                directory = root / policy
+                directory.mkdir()
+                summary = {
+                    "condition": f"online_construction_{policy}",
+                    "task_ids": ["a"],
+                    "success_rate": 0.5,
+                    "average_steps": 20.0,
+                    "parameters": {
+                        "condition_mode": "online_construction",
+                        "schedule_policy": policy,
+                        "warm_start_count": 1,
+                        "warm_start_seed": 7,
+                        "warm_start_memory_file": "documents.json",
+                        "initial_available_memory_ids": initial_ids,
+                    },
+                }
+                (directory / "summary.json").write_text(
+                    json.dumps(summary), encoding="utf-8"
+                )
+
+            with self.assertRaisesRegex(ValueError, "initial_available_memory_ids"):
+                maybe_write_online_construction_comparison(root)
+
     def test_comparison_supports_novelty_sum_and_coverage_oracles(self):
         with tempfile.TemporaryDirectory() as temporary:
             root = Path(temporary)

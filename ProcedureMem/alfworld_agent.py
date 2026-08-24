@@ -121,6 +121,7 @@ def build_messages(
 class TaskState:
     name: str
     messages: list[dict[str, str]]
+    trajectory: list[dict[str, str]] = field(default_factory=list)
     active: bool = True
     reward: bool = False
     steps: int = 0
@@ -142,6 +143,7 @@ class TaskState:
             "termination_reason": self.termination_reason,
             "error": self.error,
             "actions": self.actions,
+            "trajectory": self.trajectory,
         }
 
 
@@ -149,6 +151,7 @@ def run_alfworld_batch(
     *,
     env: Any,
     observations: Sequence[str],
+    trajectory_observations: Sequence[str] | None = None,
     names: Sequence[str],
     llm_fn: Callable[[list[dict[str, str]]], str],
     system_prompt: str,
@@ -159,6 +162,12 @@ def run_alfworld_batch(
     """Run a batch while isolating completion and failure state per task."""
     if len(observations) != len(names):
         raise ValueError("observations and names must have the same length")
+    if trajectory_observations is None:
+        trajectory_observations = observations
+    if len(trajectory_observations) != len(observations):
+        raise ValueError(
+            "trajectory_observations and observations must have the same length"
+        )
     if max_steps < 1:
         raise ValueError("max_steps must be at least 1")
     if not observations:
@@ -174,8 +183,11 @@ def run_alfworld_batch(
                 few_shot=few_shot,
                 examples=examples,
             ),
+            trajectory=[{"from": "human", "value": trajectory_observation}],
         )
-        for observation, name in zip(observations, names)
+        for observation, trajectory_observation, name in zip(
+            observations, trajectory_observations, names
+        )
     ]
 
     for _ in range(max_steps):
@@ -198,6 +210,9 @@ def run_alfworld_batch(
                     responses[index] = response
                     states[index].messages.append(
                         {"role": "assistant", "content": response}
+                    )
+                    states[index].trajectory.append(
+                        {"from": "gpt", "value": response}
                     )
                 except Exception as exc:
                     states[index].finish("llm_error", error=str(exc))
@@ -231,6 +246,9 @@ def run_alfworld_batch(
             observation = process_observation(str(observations_out[index]))
             state.messages.append(
                 {"role": "user", "content": f"Observation: {observation}"}
+            )
+            state.trajectory.append(
+                {"from": "human", "value": f"Observation: {observation}"}
             )
             if state.reward:
                 state.finish("success")

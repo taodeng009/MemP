@@ -26,6 +26,7 @@ from ProcedureMem.alfworld_experiment import (
     maybe_write_paired_comparison,
     maybe_write_memory_rerank_comparison,
     maybe_write_scheduling_comparison,
+    maybe_write_online_construction_comparison,
     reranked_retrieval_records,
     retrieval_records,
     task_id_from_gamefile,
@@ -56,6 +57,11 @@ from ProcedureMem.runtime_config import (
     configure_runtime,
     load_alfworld_config,
     load_memory_config,
+)
+from ProcedureMem.online_construction import (
+    ONLINE_POLICIES,
+    OnlineConstructionController,
+    load_warm_start_documents,
 )
 from ProcedureMem.build_edge_subsets import DEFAULT_OUTPUT as DEFAULT_EDGE_SUBSET_MANIFEST
 from ProcedureMem.benchmark_config import candidate_score_threshold
@@ -106,6 +112,7 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument(
         "--schedule-policy",
         choices=(
+            "fifo",
             "random",
             "greedy_novelty",
             "oracle_high",
@@ -118,6 +125,8 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--scheduler-seed", type=int, default=42)
     parser.add_argument("--warm-start-count", type=int)
     parser.add_argument("--warm-start-seed", type=int)
+    parser.add_argument("--warm-start-memory-file", type=Path)
+    parser.add_argument("--online-memory-dir", type=Path)
     parser.add_argument("--candidate-memory-file", type=Path)
     parser.add_argument("--alfworld-data")
     parser.add_argument("--config", default=str(DEFAULT_ALFWORLD_CONFIG))
@@ -154,6 +163,8 @@ def _validate_args(parser: argparse.ArgumentParser, args: argparse.Namespace) ->
         args.candidate_memory_file,
         args.warm_start_count,
         args.warm_start_seed,
+        args.warm_start_memory_file,
+        args.online_memory_dir,
     )
     if args.condition == "cloud_scheduled":
         if args.schedule_policy is None:
@@ -166,9 +177,38 @@ def _validate_args(parser: argparse.ArgumentParser, args: argparse.Namespace) ->
             )
         if args.warm_start_count is not None and args.warm_start_count < 0:
             parser.error("--warm-start-count cannot be negative")
+        if args.schedule_policy == "fifo":
+            parser.error("--schedule-policy fifo is only valid for online_construction")
+        if args.warm_start_memory_file is not None or args.online_memory_dir is not None:
+            parser.error(
+                "--warm-start-memory-file and --online-memory-dir are only valid "
+                "for online_construction"
+            )
+    elif args.condition == "online_construction":
+        if args.schedule_policy not in ONLINE_POLICIES:
+            parser.error(
+                "--schedule-policy must be fifo, random, or greedy_novelty "
+                "for online_construction"
+            )
+        if args.interval_size is None or args.interval_size < 1:
+            parser.error("--interval-size must be at least 1 for online_construction")
+        if args.construction_capacity is None or args.construction_capacity < 1:
+            parser.error(
+                "--construction-capacity must be at least 1 for online_construction"
+            )
+        warm_count = args.warm_start_count if args.warm_start_count is not None else 0
+        if warm_count < 0:
+            parser.error("--warm-start-count cannot be negative")
+        if warm_count > 0 and args.warm_start_memory_file is None:
+            parser.error(
+                "--warm-start-memory-file is required when --warm-start-count > 0"
+            )
+        if args.candidate_memory_file is not None:
+            parser.error("--candidate-memory-file is only valid for cloud_scheduled")
     elif any(value is not None for value in scheduling_args):
         parser.error(
-            "Scheduling arguments are only valid for --condition cloud_scheduled"
+            "Scheduling arguments are only valid for cloud_scheduled or "
+            "online_construction"
         )
     if args.condition == "memory_rerank":
         if args.rerank_candidate_k < 1 or args.rerank_top_n < 1:
@@ -279,6 +319,88 @@ def _load_scheduled_memory(args: argparse.Namespace):
     return memory, Path(candidate_path).expanduser().resolve(), candidate_pool_sha256(
         candidates
     )
+
+
+def _load_online_memory(
+    args: argparse.Namespace, *, default_memory_dir: Path
+) -> tuple[Any, tuple[str, ...], Path | None]:
+    from ProcedureMem.memory import Memory
+
+    config = load_memory_config(args.memory_config)
+    config["policy"] = {"build": "direct", "retrieve": "query", "update": None}
+    config["retrieve_num"] = args.top_k
+    config["build_model"] = args.memory_build_model
+    config["is_cold_start"] = False
+    memory_dir = (args.online_memory_dir or default_memory_dir).expanduser().resolve()
+    existing_documents = memory_dir / "direct" / "documents.json"
+    if args.online_memory_dir is not None and existing_documents.exists():
+        raise FileExistsError(
+            f"Online memory directory already contains documents: {existing_documents}. "
+            "Use a new --online-memory-dir."
+        )
+    config["memory_dir"] = str(memory_dir)
+    memory = Memory(**config)
+
+    warm_count = args.warm_start_count if args.warm_start_count is not None else 0
+    warm_seed = args.warm_start_seed if args.warm_start_seed is not None else 42
+    initial_ids: tuple[str, ...] = ()
+    warm_path: Path | None = None
+    if warm_count:
+        warm_path = args.warm_start_memory_file.expanduser().resolve()
+        documents, initial_ids = load_warm_start_documents(
+            warm_path,
+            count=warm_count,
+            seed=warm_seed,
+        )
+        memory.append_documents(documents)
+        memory.save_documents()
+        memory.rebuild_index()
+    return memory, initial_ids, warm_path
+
+
+def _write_jsonl(path: Path, rows: Sequence[dict[str, Any]]) -> None:
+    path.write_text(
+        "".join(json.dumps(row, ensure_ascii=False) + "\n" for row in rows),
+        encoding="utf-8",
+    )
+
+
+def _online_interval_metrics(
+    results: Sequence[dict[str, Any]], queue_events: Sequence[dict[str, Any]]
+) -> list[dict[str, Any]]:
+    events = {int(event["interval_id"]): event for event in queue_events}
+    interval_ids = sorted({int(result["interval_id"]) for result in results})
+    rows = []
+    for interval_id in interval_ids:
+        tasks = [
+            result for result in results if int(result["interval_id"]) == interval_id
+        ]
+        successes = sum(bool(result["reward"]) for result in tasks)
+        event = events.get(interval_id, {})
+        rows.append(
+            {
+                "interval_id": interval_id,
+                "task_count": len(tasks),
+                "success_count": successes,
+                "success_rate": successes / len(tasks),
+                "average_steps": statistics.fmean(
+                    int(result["steps"]) for result in tasks
+                ),
+                "available_memory_count": int(
+                    tasks[0].get("available_memory_count") or 0
+                ),
+                "arrivals": len(event.get("arrived_queue_ids", [])),
+                "arrived_queue_ids": event.get("arrived_queue_ids", []),
+                "queue_length_before_selection": event.get(
+                    "queue_length_before_selection", 0
+                ),
+                "selected_queue_ids": event.get("selected_queue_ids", []),
+                "queue_length_after_construction": event.get(
+                    "queue_length_after_construction", 0
+                ),
+            }
+        )
+    return rows
 
 
 def _memory_identity(record: dict[str, Any]) -> str:
@@ -407,7 +529,13 @@ def main(argv: Sequence[str] | None = None) -> int:
         alfworld_data=args.alfworld_data,
         require_llm=True,
         require_embedding=args.condition
-        in {"memory", "memory_rerank", "edge_raw", "cloud_scheduled"},
+        in {
+            "memory",
+            "memory_rerank",
+            "edge_raw",
+            "cloud_scheduled",
+            "online_construction",
+        },
     )
     llm, routed_model = _make_llm(settings.model_name, args.temperature, manifest["seed"])
     candidate_memory_path = None
@@ -422,6 +550,8 @@ def main(argv: Sequence[str] | None = None) -> int:
             candidate_memory_path,
             scheduled_candidate_pool_sha256,
         ) = _load_scheduled_memory(args)
+    elif args.condition == "online_construction":
+        memory = None
     else:
         memory = None
 
@@ -460,6 +590,10 @@ def main(argv: Sequence[str] | None = None) -> int:
         condition_name = f"cloud_scheduled_random_seed{args.scheduler_seed}"
     elif args.condition == "cloud_scheduled":
         condition_name = f"cloud_scheduled_{args.schedule_policy}"
+    elif args.condition == "online_construction" and args.schedule_policy == "random":
+        condition_name = f"online_construction_random_seed{args.scheduler_seed}"
+    elif args.condition == "online_construction":
+        condition_name = f"online_construction_{args.schedule_policy}"
     else:
         condition_name = args.condition
 
@@ -470,6 +604,26 @@ def main(argv: Sequence[str] | None = None) -> int:
     )
     condition_dir = experiment_dir / condition_name
     _prepare_output(condition_dir, args.overwrite)
+
+    online_controller = None
+    online_warm_start_path = None
+    if args.condition == "online_construction":
+        memory, initial_available_ids, online_warm_start_path = _load_online_memory(
+            args,
+            default_memory_dir=condition_dir / "memory",
+        )
+        warm_start_count = (
+            args.warm_start_count if args.warm_start_count is not None else 0
+        )
+        warm_start_seed = (
+            args.warm_start_seed if args.warm_start_seed is not None else 42
+        )
+        online_controller = OnlineConstructionController(
+            memory=memory,
+            policy=args.schedule_policy,
+            capacity=args.construction_capacity,
+            scheduler_seed=args.scheduler_seed,
+        )
 
     frozen_task_queries: tuple[str, ...] | None = None
     scheduler = None
@@ -511,29 +665,39 @@ def main(argv: Sequence[str] | None = None) -> int:
         "top_k": (
             args.rerank_top_n if args.condition == "memory_rerank" else args.top_k
         ),
-        "score_threshold": args.score_threshold,
+        "score_threshold": (
+            0.5 if args.condition == "online_construction" else args.score_threshold
+        ),
         "memory_type": (
             "raw_trajectory"
             if args.condition == "edge_raw"
             else "workflow"
-            if args.condition in {"memory", "memory_rerank", "cloud_scheduled"}
+            if args.condition
+            in {"memory", "memory_rerank", "cloud_scheduled", "online_construction"}
             else None
         ),
         "retrieval_pipeline": (
             "faiss_then_openmem_rerank"
             if args.condition == "memory_rerank"
             else "faiss_similarity"
-            if args.condition in {"memory", "cloud_scheduled"}
+            if args.condition in {"memory", "cloud_scheduled", "online_construction"}
             else None
         ),
         "memory_config": (
             str(Path(args.memory_config).resolve())
-            if args.condition in {"memory", "memory_rerank"}
+            if args.condition in {"memory", "memory_rerank", "online_construction"}
             else None
         ),
         "memory_build_model": (
-            args.memory_build_model
+            memory.build_model
+            if args.condition == "online_construction"
+            else args.memory_build_model
             if args.condition in {"memory", "memory_rerank"}
+            else None
+        ),
+        "memory_prompt": (
+            memory.prompt_spec.as_dict()
+            if args.condition == "online_construction"
             else None
         ),
         "rerank_model": args.rerank_model if args.condition == "memory_rerank" else None,
@@ -575,7 +739,8 @@ def main(argv: Sequence[str] | None = None) -> int:
         "construction_capacity": args.construction_capacity,
         "scheduler_seed": (
             args.scheduler_seed
-            if args.condition == "cloud_scheduled" and args.schedule_policy == "random"
+            if args.condition in {"cloud_scheduled", "online_construction"}
+            and args.schedule_policy == "random"
             else None
         ),
         "candidate_memory_file": (
@@ -589,10 +754,24 @@ def main(argv: Sequence[str] | None = None) -> int:
         "warm_start_seed": warm_start_seed,
         "initial_available_memory_ids": (
             list(initial_available_ids)
-            if args.condition == "cloud_scheduled"
+            if args.condition in {"cloud_scheduled", "online_construction"}
             else None
         ),
         "initial_available_pool_sha256": initial_available_pool_sha256,
+        "warm_start_memory_file": (
+            str(online_warm_start_path) if online_warm_start_path else None
+        ),
+        "online_memory_dir": (
+            str(Path(memory.memory_dir).resolve())
+            if args.condition == "online_construction"
+            else None
+        ),
+        "construction_method": (
+            "direct" if args.condition == "online_construction" else None
+        ),
+        "arrival_policy": (
+            "success_only" if args.condition == "online_construction" else None
+        ),
         "scheduled_score_threshold": (
             memory.score_threshold if args.condition == "cloud_scheduled" else None
         ),
@@ -613,13 +792,13 @@ def main(argv: Sequence[str] | None = None) -> int:
         ),
         "scheduler_score_type": (
             "nearest_reference_faiss_l2_distance"
-            if args.condition == "cloud_scheduled"
+            if args.condition in {"cloud_scheduled", "online_construction"}
             and args.schedule_policy == "greedy_novelty"
             else None
         ),
         "scheduler_higher_is_better": (
             True
-            if args.condition == "cloud_scheduled"
+            if args.condition in {"cloud_scheduled", "online_construction"}
             and args.schedule_policy == "greedy_novelty"
             else None
         ),
@@ -628,7 +807,7 @@ def main(argv: Sequence[str] | None = None) -> int:
     examples = json.loads(DEFAULT_EXAMPLES_PATH.read_text(encoding="utf-8"))
 
     results: list[dict[str, Any]] = []
-    if args.condition == "cloud_scheduled":
+    if args.condition in {"cloud_scheduled", "online_construction"}:
         batch_specs = build_interval_batches(
             len(selected_gamefiles),
             batch_size=args.batch_size,
@@ -659,6 +838,9 @@ def main(argv: Sequence[str] | None = None) -> int:
         if args.condition == "cloud_scheduled" and interval_start:
             memory.rebuild_available_index()
             interval_available_count = len(memory.available_ids)
+        elif args.condition == "online_construction" and interval_start:
+            online_controller.activate_staged(interval_id=interval_id)
+            interval_available_count = online_controller.available_memory_count
         chunk = selected_gamefiles[offset:batch_end]
         expected_ids = [
             task["task_id"] for task in manifest["tasks"][offset : offset + len(chunk)]
@@ -681,6 +863,7 @@ def main(argv: Sequence[str] | None = None) -> int:
             observations = [
                 _initial_observation(observation) for observation in observations
             ]
+            clean_observations = list(observations)
             retrieved_by_task: list[list[dict[str, Any]]] = [
                 [] for _ in observations
             ]
@@ -769,6 +952,11 @@ def main(argv: Sequence[str] | None = None) -> int:
             batch_results = run_alfworld_batch(
                 env=env,
                 observations=observations,
+                trajectory_observations=(
+                    clean_observations
+                    if args.condition == "online_construction"
+                    else None
+                ),
                 names=[_task_name(task_id) for task_id in actual_ids],
                 llm_fn=llm,
                 system_prompt=alfworld_system_prompt,
@@ -791,6 +979,7 @@ def main(argv: Sequence[str] | None = None) -> int:
                     "task_id": task_id,
                     "task_index": offset + local_index,
                     "task_type": _task_name(task_id).split("/", 1)[0],
+                    "query": task_query(clean_observations[local_index]),
                     "split": args.split,
                     "condition": condition_name,
                     "condition_mode": args.condition,
@@ -833,9 +1022,65 @@ def main(argv: Sequence[str] | None = None) -> int:
                         ],
                     }
                 )
+            elif args.condition == "online_construction":
+                retrieved_memory_ids = [
+                    record["memory_id"]
+                    for record in retrieved_records
+                    if record.get("memory_id") is not None
+                ]
+                result_fields.update(
+                    {
+                        "interval_id": interval_id,
+                        "policy": args.schedule_policy,
+                        "available_memory_count": interval_available_count,
+                        "retrieved_memory_ids": retrieved_memory_ids,
+                        "retrieved_online_memory_ids": [
+                            record["memory_id"]
+                            for record in retrieved_records
+                            if record.get("memory_origin") == "online"
+                            and record.get("memory_id") is not None
+                        ],
+                        "retrieved_source_queue_ids": [
+                            record["source_queue_id"]
+                            for record in retrieved_records
+                            if record.get("source_queue_id") is not None
+                        ],
+                    }
+                )
             result.update(result_fields)
             results.append(result)
         print(f"Completed {len(results)}/{len(selected_gamefiles)} tasks")
+
+        if args.condition == "online_construction" and interval_end:
+            interval_results = [
+                result
+                for result in results
+                if int(result["interval_id"]) == int(interval_id)
+            ]
+            arrived_ids = online_controller.admit_results(
+                interval_results,
+                interval_id=interval_id,
+            )
+            if batch_end < len(selected_gamefiles):
+                queue_event = online_controller.construct(interval_id=interval_id)
+            else:
+                queue_event = online_controller.record_final_queue(
+                    interval_id=interval_id
+                )
+            queue_event["arrived_queue_ids"] = arrived_ids
+            for result in interval_results:
+                result.update(
+                    {
+                        "arrived_queue_ids": arrived_ids,
+                        "queue_length_before_selection": queue_event[
+                            "queue_length_before_selection"
+                        ],
+                        "selected_queue_ids": queue_event["selected_queue_ids"],
+                        "queue_length_after_construction": queue_event[
+                            "queue_length_after_construction"
+                        ],
+                    }
+                )
 
         if (
             args.condition == "cloud_scheduled"
@@ -964,6 +1209,78 @@ def main(argv: Sequence[str] | None = None) -> int:
             "initial_available_pool_sha256": initial_available_pool_sha256,
             "intervals": summarize_scheduling_intervals(results),
         }
+    online_metadata = None
+    if args.condition == "online_construction":
+        _write_jsonl(
+            condition_dir / "online_trajectories.jsonl",
+            online_controller.trajectory_events,
+        )
+        _write_jsonl(
+            condition_dir / "queue_events.jsonl",
+            online_controller.queue_events,
+        )
+        _write_jsonl(
+            condition_dir / "construction_events.jsonl",
+            online_controller.construction_events,
+        )
+        constructed_memory_ids = {
+            event["constructed_memory_id"]
+            for event in online_controller.construction_events
+            if event["construction_result"] == "success"
+        }
+        retrieved_online_ids = [
+            memory_id
+            for result in results
+            for memory_id in result.get("retrieved_online_memory_ids", [])
+        ]
+        retrieved_online_unique = set(retrieved_online_ids)
+        waiting_times = [
+            int(event["waiting_intervals"])
+            for event in online_controller.construction_events
+        ]
+        online_metadata = {
+            "policy": args.schedule_policy,
+            "construction_method": "direct",
+            "arrival_policy": "success_only",
+            "interval_size": args.interval_size,
+            "construction_capacity": args.construction_capacity,
+            "warm_start_count": warm_start_count,
+            "warm_start_seed": warm_start_seed,
+            "warm_start_memory_file": (
+                str(online_warm_start_path) if online_warm_start_path else None
+            ),
+            "initial_available_memory_ids": list(initial_available_ids),
+            "intervals": _online_interval_metrics(
+                results, online_controller.queue_events
+            ),
+            "arrival_count": len(online_controller.trajectory_events),
+            "construction_attempt_count": len(
+                online_controller.construction_events
+            ),
+            "construction_success_count": sum(
+                event["construction_result"] == "success"
+                for event in online_controller.construction_events
+            ),
+            "construction_failure_count": sum(
+                event["construction_result"] == "failure"
+                for event in online_controller.construction_events
+            ),
+            "final_queue_length": len(online_controller.queue),
+            "final_pending_queue_ids": list(online_controller.queue.pending_ids),
+            "waiting_intervals_mean": (
+                statistics.fmean(waiting_times) if waiting_times else None
+            ),
+            "waiting_intervals": waiting_times,
+            "constructed_memory_count": len(constructed_memory_ids),
+            "online_retrieval_count": len(retrieved_online_ids),
+            "retrieved_constructed_memory_count": len(retrieved_online_unique),
+            "never_retrieved_constructed_memory_count": len(
+                constructed_memory_ids - retrieved_online_unique
+            ),
+            "never_retrieved_constructed_memory_ids": sorted(
+                constructed_memory_ids - retrieved_online_unique
+            ),
+        }
     summary = write_results(
         condition_dir,
         results,
@@ -974,6 +1291,7 @@ def main(argv: Sequence[str] | None = None) -> int:
             "rerank_summary": rerank_metadata,
             "retrieval_summary": retrieval_metadata,
             "scheduling_summary": scheduling_metadata,
+            "online_construction_summary": online_metadata,
         },
     )
     print(
@@ -1033,6 +1351,14 @@ def main(argv: Sequence[str] | None = None) -> int:
                 "average-steps delta "
                 f"{coverage_novelty_steps_delta:+.2f}"
             )
+    online_comparison = maybe_write_online_construction_comparison(experiment_dir)
+    if online_comparison:
+        print(
+            "Online FIFO vs Greedy Novelty: "
+            f"{online_comparison['greedy_minus_fifo_success_rate_percentage_points']:+.2f} "
+            "percentage points; average-steps delta "
+            f"{online_comparison['greedy_minus_fifo_average_steps']:+.2f}"
+        )
     return 0
 
 

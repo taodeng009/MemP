@@ -96,6 +96,25 @@ class AlfworldActionParserTests(unittest.TestCase):
 
 
 class AlfworldBatchRunnerTests(unittest.TestCase):
+    def test_clean_trajectory_excludes_injected_prompt_context(self):
+        env = ImmediateSuccessEnv()
+        results = run_alfworld_batch(
+            env=env,
+            observations=["task with retrieved workflow"],
+            trajectory_observations=["clean task observation"],
+            names=["task"],
+            llm_fn=lambda _: "Thought: act\nAction: go to table 1",
+            system_prompt="system",
+            few_shot=False,
+        )
+
+        serialized = json.dumps(results[0]["trajectory"])
+        self.assertIn("clean task observation", serialized)
+        self.assertNotIn("retrieved workflow", serialized)
+        self.assertNotIn("system", serialized)
+        self.assertEqual(results[0]["trajectory"][0]["from"], "human")
+        self.assertEqual(results[0]["trajectory"][1]["from"], "gpt")
+
     def test_tasks_complete_independently_and_keep_per_task_steps(self):
         env = ScriptedBatchEnv()
 

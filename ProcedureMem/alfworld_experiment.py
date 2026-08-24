@@ -15,7 +15,12 @@ from typing import Any, Iterable, Sequence
 MANIFEST_SCHEMA_VERSION = 1
 RESULT_SCHEMA_VERSION = 1
 CONDITIONS = ("no_memory", "memory")
-EVAL_CONDITIONS = CONDITIONS + ("memory_rerank", "edge_raw", "cloud_scheduled")
+EVAL_CONDITIONS = CONDITIONS + (
+    "memory_rerank",
+    "edge_raw",
+    "cloud_scheduled",
+    "online_construction",
+)
 SPLIT_NAMES = {
     "valid_seen": "eval_in_distribution",
     "valid_unseen": "eval_out_of_distribution",
@@ -158,6 +163,10 @@ def retrieval_records(items: Sequence[Any]) -> list[dict[str, Any]]:
             "score": float(score) if score is not None else None,
             "source": metadata.get("source"),
             "activated_interval": metadata.get("activated_interval"),
+            "memory_origin": metadata.get("memory_origin"),
+            "source_queue_id": metadata.get("source_queue_id"),
+            "source_task_id": metadata.get("source_task_id"),
+            "available_from_interval": metadata.get("available_from_interval"),
         }
         if metadata.get("memory_type") == "raw_trajectory" or "trajectory" in metadata:
             record.update(
@@ -704,4 +713,117 @@ def maybe_write_scheduling_comparison(
         )
     write_json(root / "scheduling_comparison.json", comparison)
     _write_csv(root / "scheduling_comparison.csv", [comparison])
+    return comparison
+
+
+def maybe_write_online_construction_comparison(
+    experiment_dir: str | Path,
+) -> dict[str, Any] | None:
+    """Compare FIFO and Greedy Novelty online queue runs when both exist."""
+    root = Path(experiment_dir)
+    if not root.is_dir():
+        return None
+    by_policy: dict[str, dict[str, Any]] = {}
+    random_runs: list[dict[str, Any]] = []
+    for path in sorted(root.glob("*/summary.json")):
+        summary = load_json(path)
+        parameters = summary.get("parameters") or {}
+        if parameters.get("condition_mode") != "online_construction":
+            continue
+        policy = parameters.get("schedule_policy")
+        if policy == "random":
+            random_runs.append(summary)
+            continue
+        if policy in {"fifo", "greedy_novelty"}:
+            if policy in by_policy:
+                raise ValueError(
+                    f"Online construction comparison has duplicate {policy} runs"
+                )
+            by_policy[policy] = summary
+    if set(by_policy) != {"fifo", "greedy_novelty"}:
+        return None
+
+    fifo = by_policy["fifo"]
+    greedy = by_policy["greedy_novelty"]
+    fifo_parameters = fifo.get("parameters") or {}
+    greedy_parameters = greedy.get("parameters") or {}
+    controlled_keys = (
+        "model",
+        "agent_api_base_url",
+        "embedding_model",
+        "split",
+        "seed",
+        "batch_size",
+        "max_steps",
+        "temperature",
+        "top_p",
+        "few_shot",
+        "top_k",
+        "score_threshold",
+        "manifest_sha256",
+        "interval_size",
+        "construction_capacity",
+        "construction_method",
+        "arrival_policy",
+        "memory_build_model",
+        "memory_prompt",
+        "warm_start_count",
+        "warm_start_seed",
+        "warm_start_memory_file",
+        "initial_available_memory_ids",
+    )
+    if fifo.get("task_ids") != greedy.get("task_ids"):
+        raise ValueError("Online construction runs use different task IDs or order")
+    mismatches = [
+        key
+        for key in controlled_keys
+        if fifo_parameters.get(key) != greedy_parameters.get(key)
+    ]
+    if mismatches:
+        raise ValueError(
+            "Online construction parameter mismatch: " + ", ".join(mismatches)
+        )
+
+    def compact(summary: dict[str, Any]) -> dict[str, Any]:
+        online = summary.get("online_construction_summary") or {}
+        return {
+            "condition": summary["condition"],
+            "success_rate": float(summary["success_rate"]),
+            "average_steps": float(summary["average_steps"]),
+            "arrival_count": online.get("arrival_count"),
+            "construction_success_count": online.get(
+                "construction_success_count"
+            ),
+            "construction_failure_count": online.get(
+                "construction_failure_count"
+            ),
+            "final_queue_length": online.get("final_queue_length"),
+            "waiting_intervals_mean": online.get("waiting_intervals_mean"),
+            "online_retrieval_count": online.get("online_retrieval_count"),
+            "retrieved_constructed_memory_count": online.get(
+                "retrieved_constructed_memory_count"
+            ),
+        }
+
+    fifo_run = compact(fifo)
+    greedy_run = compact(greedy)
+    comparison = {
+        "schema_version": RESULT_SCHEMA_VERSION,
+        "experiment_type": "online_construction_queue_scheduling",
+        "fifo": fifo_run,
+        "greedy_novelty": greedy_run,
+        "greedy_minus_fifo_success_rate": (
+            greedy_run["success_rate"] - fifo_run["success_rate"]
+        ),
+        "greedy_minus_fifo_success_rate_percentage_points": (
+            greedy_run["success_rate"] - fifo_run["success_rate"]
+        )
+        * 100,
+        "greedy_minus_fifo_average_steps": (
+            greedy_run["average_steps"] - fifo_run["average_steps"]
+        ),
+        "random_runs": [compact(summary) for summary in random_runs],
+    }
+    write_json(root / "online_construction_comparison.json", comparison)
+    _write_csv(root / "online_construction_comparison.csv", [comparison])
     return comparison

@@ -86,6 +86,8 @@ class Memory:
         self.manifest_path = self.memory_dir + "/" + self.build_policy + "/manifest.json"
         self.prompt_spec = get_prompt_spec(self.build_policy)
         self.documents = []
+        self.vector_store = None
+        self.doc_facts_embeddings = None
 
 
         os.makedirs(self.memory_dir, exist_ok=True)
@@ -95,6 +97,7 @@ class Memory:
 
         # Initialize embedding model
         self.embedding = get_embedding_model()
+        self._initialize_cached_embedder()
 
         # Load document metadata
         
@@ -105,10 +108,15 @@ class Memory:
 
 
 
-    def _save_documents(self):
-        """
-        Save all current documents to disk.
-        """
+    def _initialize_cached_embedder(self):
+        self.store = LocalFileStore(self.cache_dir)
+        namespace = getattr(self.embedding, "model", None) or self.embedding.__class__.__name__
+        self.cached_embedder = CacheBackedEmbeddings.from_bytes_store(
+            self.embedding, self.store, namespace=str(namespace)
+        )
+
+    def save_documents(self):
+        """Persist workflow documents and their construction manifest."""
         with open(self.documents_path, "w", encoding="utf-8") as f:
             json.dump(
                 [{"page_content": d.page_content, "metadata": d.metadata} for d in self.documents],
@@ -127,17 +135,14 @@ class Memory:
                 ensure_ascii=False,
             )
 
-        self.store = LocalFileStore(self.cache_dir)
-        self.cached_embedder = CacheBackedEmbeddings.from_bytes_store(
-            self.embedding, self.store, namespace=self.embedding.model
-        )
-
-        
-        # Create FAISS vector store from documents
+    def rebuild_index(self):
+        """Rebuild retrieval state; an empty online memory is valid."""
+        if not self.documents:
+            self.vector_store = None
+            self.doc_facts_embeddings = None
+            return
         self.vector_store = FAISS.from_documents(self.documents, self.cached_embedder)
-
         self.doc_facts_embeddings = None
-        #Compute and cache facts embeddings if needed
         if self.policy.get("retrieve") == "ave_fact":
             self.doc_facts_embeddings = load_facts_embedding_cache(self.facts_cache_path)
             if self.doc_facts_embeddings is None:
@@ -147,6 +152,31 @@ class Memory:
                 save_facts_embedding_cache(self.facts_cache_path, self.doc_facts_embeddings)
             else:
                 print(f"[INFO] Loaded facts embeddings from {self.facts_cache_path}")
+
+    def append_documents(self, documents):
+        """Append built documents without applying statistics, reflection, or eviction."""
+        new_documents = list(documents)
+        existing_ids = {
+            doc.metadata.get("memory_id")
+            for doc in self.documents
+            if doc.metadata.get("memory_id") is not None
+        }
+        incoming_ids = [
+            doc.metadata.get("memory_id")
+            for doc in new_documents
+            if doc.metadata.get("memory_id") is not None
+        ]
+        if len(incoming_ids) != len(set(incoming_ids)):
+            raise ValueError("Cannot append duplicate memory IDs")
+        repeated = sorted(set(incoming_ids) & existing_ids)
+        if repeated:
+            raise ValueError("Memory IDs already exist: " + ", ".join(repeated[:5]))
+        self.documents.extend(new_documents)
+
+    def _save_documents(self):
+        """Backward-compatible save-and-rebuild operation."""
+        self.save_documents()
+        self.rebuild_index()
 
     def process_trajectory_item(self, d):
         """
@@ -158,8 +188,12 @@ class Memory:
         trajectory = d.get("trajectory")
         facts = d.get("facts", {})
 
-        # A query built with a different prompt is not the same memory item.
-        if any(
+        memory_id = d.get("memory_id")
+        if memory_id is not None:
+            if any(doc.metadata.get("memory_id") == memory_id for doc in self.documents):
+                print(f"[INFO] Memory ID '{memory_id}' already exists. Skipping...")
+                return None
+        elif any(
             doc.metadata.get("query") == query
             and doc.metadata.get("build_policy") == self.build_policy
             and doc.metadata.get("prompt_sha256") == self.prompt_spec.sha256
@@ -172,7 +206,7 @@ class Memory:
         workflow = self.build(query, trajectory)
 
         # Create Document
-        content = json.dumps({"query": query, "workflow": workflow, "facts": facts})
+        extra_metadata = dict(d.get("metadata") or {})
         doc = Document(
             page_content=query,
             metadata={
@@ -186,10 +220,17 @@ class Memory:
                 "prompt_sha256": self.prompt_spec.sha256,
                 "hit": 0,
                 "success": 0,
+                **extra_metadata,
             }
         )
+        if memory_id is not None:
+            doc.metadata["memory_id"] = str(memory_id)
 
         return doc
+
+    def build_document(self, item):
+        """Build one workflow Document without mutating or rebuilding memory."""
+        return self.process_trajectory_item(item)
 
     def process_trajectory_item_reflect(self, trajectory, reward, workflow):
         if not reward and workflow != "":
@@ -345,12 +386,14 @@ class Memory:
         Retrieve from memory according to the specified policy.
         """
         retrieve_num = min(self.retrieve_num, len(self.documents))
+        if retrieve_num == 0 or self.vector_store is None:
+            return []
         if self.retrieve_policy == "query":
-            return self.vector_store.similarity_search_with_score(key, k=self.retrieve_num, score_threshold=0.5)
+            return self.vector_store.similarity_search_with_score(key, k=retrieve_num, score_threshold=0.5)
 
         elif self.retrieve_policy == "facts":
             key = str(key)
-            return self.vector_store.similarity_search_with_score(key, k=self.retrieve_num, score_threshold=0.4)
+            return self.vector_store.similarity_search_with_score(key, k=retrieve_num, score_threshold=0.4)
 
         elif self.retrieve_policy == "random":
             return random.sample(self.documents, min(self.retrieve_num, len(self.documents)))
