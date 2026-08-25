@@ -15,6 +15,7 @@ from ProcedureMem.llm_api import (
     get_embedding_model,
     resolve_memory_build_seed,
     resolve_memory_build_temperature,
+    resolve_memory_build_top_k,
 )
 from ProcedureMem.Alfworld.memory_prompts import (
     generate_workflow_from_trajectory_prompt,
@@ -54,6 +55,7 @@ class Memory:
             kwargs.get("build_temperature")
         )
         self.build_seed = resolve_memory_build_seed(kwargs.get("build_seed"))
+        self.build_top_k = resolve_memory_build_top_k(kwargs.get("build_top_k"))
         self.build_api_key = (
             kwargs.get("build_api_key")
             or os.getenv("MEMORY_BUILD_API_KEY")
@@ -138,6 +140,7 @@ class Memory:
                     build_model=self.build_model,
                     build_temperature=self.build_temperature,
                     build_seed=self.build_seed,
+                    build_top_k=self.build_top_k,
                     trajectory_file=self.trajectory_file,
                     trajectory_count=self.trajectory_count,
                 ),
@@ -360,6 +363,16 @@ class Memory:
                 f"{self.build_seed!r} was requested. Use matching "
                 "MEMORY_BUILD_SEED or choose a new memory_dir."
             )
+        cached_build_top_k = manifest.get("build_top_k")
+        if (
+            cached_build_top_k is not None
+            and int(cached_build_top_k) != self.build_top_k
+        ):
+            raise RuntimeError(
+                f"Memory cache was built with top_k {cached_build_top_k!r}, but "
+                f"{self.build_top_k!r} was requested. Use matching "
+                "MEMORY_BUILD_TOP_K or choose a new memory_dir."
+            )
         self.trajectory_file = manifest.get("trajectory_file")
         self.trajectory_count = manifest.get("trajectory_count")
 
@@ -392,6 +405,7 @@ class Memory:
                 api_base_url=self.build_api_base_url,
                 temperature=self.build_temperature,
                 seed=self.build_seed,
+                top_k=self.build_top_k,
             )
             workflow_ids = get_llm_response(
                 generate_workflow_from_events_prompt(query, events),
@@ -401,6 +415,7 @@ class Memory:
                 api_base_url=self.build_api_base_url,
                 temperature=self.build_temperature,
                 seed=self.build_seed,
+                top_k=self.build_top_k,
             )
             workflow = [events[wid - 1]['action'] for wid in workflow_ids]
         elif self.build_policy == "direct":
@@ -412,6 +427,7 @@ class Memory:
                 api_base_url=self.build_api_base_url,
                 temperature=self.build_temperature,
                 seed=self.build_seed,
+                top_k=self.build_top_k,
             )
         
         return workflow

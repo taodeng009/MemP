@@ -416,6 +416,7 @@ def build_condition_comparison(
         "memory_build_model",
         "memory_build_temperature",
         "memory_build_seed",
+        "memory_build_top_k",
         "manifest_sha256",
     )
     mismatches = [
@@ -770,6 +771,7 @@ def maybe_write_online_construction_comparison(
         "memory_build_model",
         "memory_build_temperature",
         "memory_build_seed",
+        "memory_build_top_k",
         "memory_prompt",
         "warm_start_count",
         "warm_start_seed",

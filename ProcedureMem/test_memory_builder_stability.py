@@ -125,6 +125,7 @@ def main(argv: Sequence[str] | None = None) -> int:
         get_llm_response,
         resolve_memory_build_seed,
         resolve_memory_build_temperature,
+        resolve_memory_build_top_k,
     )
     from ProcedureMem.runtime_config import load_environment
 
@@ -134,6 +135,7 @@ def main(argv: Sequence[str] | None = None) -> int:
     api_base_url = os.getenv("MEMORY_BUILD_API_BASE_URL") or None
     temperature = resolve_memory_build_temperature()
     seed = resolve_memory_build_seed()
+    top_k = resolve_memory_build_top_k()
     messages = generate_workflow_from_trajectory_prompt(
         TEST_QUERY, TEST_TRAJECTORY
     )
@@ -147,12 +149,14 @@ def main(argv: Sequence[str] | None = None) -> int:
             api_base_url=api_base_url,
             temperature=temperature,
             seed=seed,
+            top_k=top_k,
         )
 
     print(f"Environment: {env_path}")
     print(f"Builder model: {model}")
     print(f"Temperature: {temperature}")
     print(f"Seed: {seed}")
+    print(f"Top-k: {top_k}")
     print(f"Sequential requests: {args.calls}")
     sequential_outputs = [build_once() for _ in range(args.calls)]
 
@@ -174,6 +178,7 @@ def main(argv: Sequence[str] | None = None) -> int:
             "api_base_url": api_base_url,
             "temperature": temperature,
             "seed": seed,
+            "top_k": top_k,
             "enable_thinking": os.getenv("MEMORY_BUILD_ENABLE_THINKING"),
             "calls_per_phase": args.calls,
             "concurrent_workers": worker_count,

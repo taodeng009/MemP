@@ -15,24 +15,29 @@ class MemoryBuildGenerationSettingsTests(unittest.TestCase):
         with patch.dict(os.environ, {}, clear=True):
             self.assertEqual(llm_api.resolve_memory_build_temperature(), 0.0)
             self.assertEqual(llm_api.resolve_memory_build_seed(), 42)
+            self.assertEqual(llm_api.resolve_memory_build_top_k(), 1)
 
     def test_environment_overrides_defaults(self):
         values = {
             "MEMORY_BUILD_TEMPERATURE": "0.25",
             "MEMORY_BUILD_SEED": "7",
+            "MEMORY_BUILD_TOP_K": "3",
         }
         with patch.dict(os.environ, values, clear=True):
             self.assertEqual(llm_api.resolve_memory_build_temperature(), 0.25)
             self.assertEqual(llm_api.resolve_memory_build_seed(), 7)
+            self.assertEqual(llm_api.resolve_memory_build_top_k(), 3)
 
     def test_explicit_values_override_environment(self):
         values = {
             "MEMORY_BUILD_TEMPERATURE": "0.25",
             "MEMORY_BUILD_SEED": "7",
+            "MEMORY_BUILD_TOP_K": "3",
         }
         with patch.dict(os.environ, values, clear=True):
             self.assertEqual(llm_api.resolve_memory_build_temperature(0), 0.0)
             self.assertEqual(llm_api.resolve_memory_build_seed(42), 42)
+            self.assertEqual(llm_api.resolve_memory_build_top_k(1), 1)
 
     def test_request_includes_resolved_temperature_and_seed(self):
         response = SimpleNamespace(
@@ -58,22 +63,30 @@ class MemoryBuildGenerationSettingsTests(unittest.TestCase):
                 model="builder",
                 temperature=0,
                 seed=42,
+                top_k=1,
             )
 
         self.assertEqual(result, "workflow")
         self.assertEqual(captured["temperature"], 0.0)
         self.assertEqual(captured["seed"], 42)
+        self.assertEqual(captured["extra_body"]["top_k"], 1)
 
     def test_invalid_environment_values_are_rejected(self):
         with patch.dict(
             os.environ,
-            {"MEMORY_BUILD_TEMPERATURE": "nan", "MEMORY_BUILD_SEED": "4.2"},
+            {
+                "MEMORY_BUILD_TEMPERATURE": "nan",
+                "MEMORY_BUILD_SEED": "4.2",
+                "MEMORY_BUILD_TOP_K": "0",
+            },
             clear=True,
         ):
             with self.assertRaisesRegex(ValueError, "MEMORY_BUILD_TEMPERATURE"):
                 llm_api.resolve_memory_build_temperature()
             with self.assertRaisesRegex(ValueError, "MEMORY_BUILD_SEED"):
                 llm_api.resolve_memory_build_seed()
+            with self.assertRaisesRegex(ValueError, "MEMORY_BUILD_TOP_K"):
+                llm_api.resolve_memory_build_top_k()
 
 
 if __name__ == "__main__":

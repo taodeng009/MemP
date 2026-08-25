@@ -12,6 +12,7 @@ _UNSET = object()
 
 DEFAULT_MEMORY_BUILD_TEMPERATURE = 0.0
 DEFAULT_MEMORY_BUILD_SEED = 42
+DEFAULT_MEMORY_BUILD_TOP_K = 1
 TOP_P = 1
 MAX_TOKENS = 4096
 
@@ -83,6 +84,33 @@ def resolve_memory_build_seed(value=None):
     return seed
 
 
+def resolve_memory_build_top_k(value=None):
+    raw_value = value
+    if raw_value is None:
+        raw_value = os.getenv("MEMORY_BUILD_TOP_K")
+    if raw_value is None or (isinstance(raw_value, str) and not raw_value.strip()):
+        return DEFAULT_MEMORY_BUILD_TOP_K
+    if isinstance(raw_value, bool):
+        raise ValueError(
+            f"MEMORY_BUILD_TOP_K must be a positive integer, found {raw_value!r}"
+        )
+    try:
+        top_k = int(raw_value)
+    except (TypeError, ValueError) as exc:
+        raise ValueError(
+            f"MEMORY_BUILD_TOP_K must be a positive integer, found {raw_value!r}"
+        ) from exc
+    if (
+        top_k < 1
+        or (isinstance(raw_value, float) and raw_value != top_k)
+        or (isinstance(raw_value, str) and raw_value.strip() != str(top_k))
+    ):
+        raise ValueError(
+            f"MEMORY_BUILD_TOP_K must be a positive integer, found {raw_value!r}"
+        )
+    return top_k
+
+
 def _get_client(api_key=None, api_base_url=_UNSET):
     resolved_api_key = api_key or _required_env("OPENAI_API_KEY")
     kwargs = {"api_key": resolved_api_key}
@@ -101,6 +129,7 @@ def get_response(
     api_base_url=_UNSET,
     temperature=None,
     seed=None,
+    top_k=None,
 ):
     client = _get_client(api_key=api_key, api_base_url=api_base_url)
     request = {
@@ -111,9 +140,11 @@ def get_response(
         "top_p": TOP_P,
         "max_tokens": MAX_TOKENS,
     }
+    extra_body = {"top_k": resolve_memory_build_top_k(top_k)}
     enable_thinking = _optional_bool_env("MEMORY_BUILD_ENABLE_THINKING")
     if enable_thinking is not None:
-        request["extra_body"] = {"enable_thinking": enable_thinking}
+        extra_body["enable_thinking"] = enable_thinking
+    request["extra_body"] = extra_body
     response = client.chat.completions.create(**request)
     if not hasattr(response, "error"):
         return response.choices[0].message.content
@@ -128,6 +159,7 @@ def get_llm_response(
     api_base_url=_UNSET,
     temperature=None,
     seed=None,
+    top_k=None,
 ):
     ans = get_response(
         messages,
@@ -136,6 +168,7 @@ def get_llm_response(
         api_base_url=api_base_url,
         temperature=temperature,
         seed=seed,
+        top_k=top_k,
     )
     if is_string:
         return ans
