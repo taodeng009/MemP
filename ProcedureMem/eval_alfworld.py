@@ -102,6 +102,8 @@ def build_parser() -> argparse.ArgumentParser:
     )
     parser.add_argument("--model")
     parser.add_argument("--memory-build-model")
+    parser.add_argument("--memory-build-temperature", type=float)
+    parser.add_argument("--memory-build-seed", type=int)
     parser.add_argument("--memory-config", default=str(DEFAULT_MEMORY_CONFIG))
     parser.add_argument("--edge-capacity", type=int)
     parser.add_argument(
@@ -283,6 +285,10 @@ def _load_memory(args: argparse.Namespace):
         args.rerank_top_n if args.condition == "memory_rerank" else args.top_k
     )
     config["build_model"] = args.memory_build_model
+    if args.memory_build_temperature is not None:
+        config["build_temperature"] = args.memory_build_temperature
+    if args.memory_build_seed is not None:
+        config["build_seed"] = args.memory_build_seed
     config["is_cold_start"] = True
     return Memory(**config)
 
@@ -330,6 +336,10 @@ def _load_online_memory(
     config["policy"] = {"build": "direct", "retrieve": "query", "update": None}
     config["retrieve_num"] = args.top_k
     config["build_model"] = args.memory_build_model
+    if args.memory_build_temperature is not None:
+        config["build_temperature"] = args.memory_build_temperature
+    if args.memory_build_seed is not None:
+        config["build_seed"] = args.memory_build_seed
     config["is_cold_start"] = False
     memory_dir = (args.online_memory_dir or default_memory_dir).expanduser().resolve()
     existing_documents = memory_dir / "direct" / "documents.json"
@@ -693,6 +703,16 @@ def main(argv: Sequence[str] | None = None) -> int:
             if args.condition == "online_construction"
             else args.memory_build_model
             if args.condition in {"memory", "memory_rerank"}
+            else None
+        ),
+        "memory_build_temperature": (
+            memory.build_temperature
+            if args.condition in {"memory", "memory_rerank", "online_construction"}
+            else None
+        ),
+        "memory_build_seed": (
+            memory.build_seed
+            if args.condition in {"memory", "memory_rerank", "online_construction"}
             else None
         ),
         "memory_prompt": (
@@ -1242,6 +1262,9 @@ def main(argv: Sequence[str] | None = None) -> int:
             "policy": args.schedule_policy,
             "construction_method": "direct",
             "arrival_policy": "success_only",
+            "memory_build_model": memory.build_model,
+            "memory_build_temperature": memory.build_temperature,
+            "memory_build_seed": memory.build_seed,
             "interval_size": args.interval_size,
             "construction_capacity": args.construction_capacity,
             "warm_start_count": warm_start_count,

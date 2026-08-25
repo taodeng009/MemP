@@ -148,6 +148,8 @@ def build_prompt_manifest(
     build_policy: str,
     *,
     build_model: str | None = None,
+    build_temperature: float | None = None,
+    build_seed: int | None = None,
     trajectory_file: str | None = None,
     trajectory_count: int | None = None,
 ) -> dict:
@@ -156,6 +158,8 @@ def build_prompt_manifest(
         "prompt": get_prompt_spec(build_policy).as_dict(),
     }
     manifest["build_model"] = build_model
+    manifest["build_temperature"] = build_temperature
+    manifest["build_seed"] = build_seed
     manifest["trajectory_file"] = trajectory_file
     manifest["trajectory_count"] = trajectory_count
     return manifest

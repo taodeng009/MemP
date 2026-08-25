@@ -1,5 +1,6 @@
 from openai import OpenAI
 import json
+import math
 from retry import retry
 import os
 from ProcedureMem.runtime_config import load_environment
@@ -9,7 +10,8 @@ load_environment()
 
 _UNSET = object()
 
-TEMPERATURE = 0.2
+DEFAULT_MEMORY_BUILD_TEMPERATURE = 0.0
+DEFAULT_MEMORY_BUILD_SEED = 42
 TOP_P = 1
 MAX_TOKENS = 4096
 
@@ -33,6 +35,54 @@ def _optional_bool_env(name):
     raise ValueError(f"{name} must be true or false, found {value!r}")
 
 
+def resolve_memory_build_temperature(value=None):
+    raw_value = value
+    if raw_value is None:
+        raw_value = os.getenv("MEMORY_BUILD_TEMPERATURE")
+    if raw_value is None or (isinstance(raw_value, str) and not raw_value.strip()):
+        return DEFAULT_MEMORY_BUILD_TEMPERATURE
+    try:
+        temperature = float(raw_value)
+    except (TypeError, ValueError) as exc:
+        raise ValueError(
+            "MEMORY_BUILD_TEMPERATURE must be a non-negative finite number, "
+            f"found {raw_value!r}"
+        ) from exc
+    if not math.isfinite(temperature) or temperature < 0:
+        raise ValueError(
+            "MEMORY_BUILD_TEMPERATURE must be a non-negative finite number, "
+            f"found {raw_value!r}"
+        )
+    return temperature
+
+
+def resolve_memory_build_seed(value=None):
+    raw_value = value
+    if raw_value is None:
+        raw_value = os.getenv("MEMORY_BUILD_SEED")
+    if raw_value is None or (isinstance(raw_value, str) and not raw_value.strip()):
+        return DEFAULT_MEMORY_BUILD_SEED
+    if isinstance(raw_value, bool):
+        raise ValueError(
+            f"MEMORY_BUILD_SEED must be an integer, found {raw_value!r}"
+        )
+    try:
+        seed = int(raw_value)
+    except (TypeError, ValueError) as exc:
+        raise ValueError(
+            f"MEMORY_BUILD_SEED must be an integer, found {raw_value!r}"
+        ) from exc
+    if isinstance(raw_value, float) and raw_value != seed:
+        raise ValueError(
+            f"MEMORY_BUILD_SEED must be an integer, found {raw_value!r}"
+        )
+    if isinstance(raw_value, str) and raw_value.strip() != str(seed):
+        raise ValueError(
+            f"MEMORY_BUILD_SEED must be an integer, found {raw_value!r}"
+        )
+    return seed
+
+
 def _get_client(api_key=None, api_base_url=_UNSET):
     resolved_api_key = api_key or _required_env("OPENAI_API_KEY")
     kwargs = {"api_key": resolved_api_key}
@@ -44,12 +94,20 @@ def _get_client(api_key=None, api_base_url=_UNSET):
         kwargs["base_url"] = api_base
     return OpenAI(**kwargs)
 
-def get_response(messages, model=None, api_key=None, api_base_url=_UNSET):
+def get_response(
+    messages,
+    model=None,
+    api_key=None,
+    api_base_url=_UNSET,
+    temperature=None,
+    seed=None,
+):
     client = _get_client(api_key=api_key, api_base_url=api_base_url)
     request = {
         "model": model or _required_env("MODEL_NAME"),
         "messages": messages,
-        "temperature": TEMPERATURE,
+        "temperature": resolve_memory_build_temperature(temperature),
+        "seed": resolve_memory_build_seed(seed),
         "top_p": TOP_P,
         "max_tokens": MAX_TOKENS,
     }
@@ -68,12 +126,16 @@ def get_llm_response(
     model=None,
     api_key=None,
     api_base_url=_UNSET,
+    temperature=None,
+    seed=None,
 ):
     ans = get_response(
         messages,
         model=model,
         api_key=api_key,
         api_base_url=api_base_url,
+        temperature=temperature,
+        seed=seed,
     )
     if is_string:
         return ans

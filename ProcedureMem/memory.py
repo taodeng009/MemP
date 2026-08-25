@@ -10,7 +10,12 @@ from langchain.embeddings import CacheBackedEmbeddings
 from langchain_core.documents import Document
 from concurrent.futures import ThreadPoolExecutor, as_completed
 
-from ProcedureMem.llm_api import get_llm_response, get_embedding_model
+from ProcedureMem.llm_api import (
+    get_llm_response,
+    get_embedding_model,
+    resolve_memory_build_seed,
+    resolve_memory_build_temperature,
+)
 from ProcedureMem.Alfworld.memory_prompts import (
     generate_workflow_from_trajectory_prompt,
     generate_events_from_trajectory_prompt,
@@ -45,6 +50,10 @@ class Memory:
                 "Missing memory build model. Set MEMORY_BUILD_MODEL_NAME, pass "
                 "build_model, or configure MODEL_NAME as a fallback."
             )
+        self.build_temperature = resolve_memory_build_temperature(
+            kwargs.get("build_temperature")
+        )
+        self.build_seed = resolve_memory_build_seed(kwargs.get("build_seed"))
         self.build_api_key = (
             kwargs.get("build_api_key")
             or os.getenv("MEMORY_BUILD_API_KEY")
@@ -127,6 +136,8 @@ class Memory:
                 build_prompt_manifest(
                     self.build_policy,
                     build_model=self.build_model,
+                    build_temperature=self.build_temperature,
+                    build_seed=self.build_seed,
                     trajectory_file=self.trajectory_file,
                     trajectory_count=self.trajectory_count,
                 ),
@@ -331,6 +342,24 @@ class Memory:
                 "artifact without --memory-build-model, or choose a new memory_dir."
             )
         self.build_model = cached_build_model
+        cached_build_temperature = manifest.get("build_temperature")
+        if (
+            cached_build_temperature is not None
+            and float(cached_build_temperature) != self.build_temperature
+        ):
+            raise RuntimeError(
+                f"Memory cache was built with temperature "
+                f"{cached_build_temperature!r}, but {self.build_temperature!r} "
+                "was requested. Use matching MEMORY_BUILD_TEMPERATURE or choose "
+                "a new memory_dir."
+            )
+        cached_build_seed = manifest.get("build_seed")
+        if cached_build_seed is not None and int(cached_build_seed) != self.build_seed:
+            raise RuntimeError(
+                f"Memory cache was built with seed {cached_build_seed!r}, but "
+                f"{self.build_seed!r} was requested. Use matching "
+                "MEMORY_BUILD_SEED or choose a new memory_dir."
+            )
         self.trajectory_file = manifest.get("trajectory_file")
         self.trajectory_count = manifest.get("trajectory_count")
 
@@ -361,6 +390,8 @@ class Memory:
                 model=self.build_model,
                 api_key=self.build_api_key,
                 api_base_url=self.build_api_base_url,
+                temperature=self.build_temperature,
+                seed=self.build_seed,
             )
             workflow_ids = get_llm_response(
                 generate_workflow_from_events_prompt(query, events),
@@ -368,6 +399,8 @@ class Memory:
                 model=self.build_model,
                 api_key=self.build_api_key,
                 api_base_url=self.build_api_base_url,
+                temperature=self.build_temperature,
+                seed=self.build_seed,
             )
             workflow = [events[wid - 1]['action'] for wid in workflow_ids]
         elif self.build_policy == "direct":
@@ -377,6 +410,8 @@ class Memory:
                 model=self.build_model,
                 api_key=self.build_api_key,
                 api_base_url=self.build_api_base_url,
+                temperature=self.build_temperature,
+                seed=self.build_seed,
             )
         
         return workflow

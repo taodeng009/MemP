@@ -44,12 +44,16 @@ class AlfworldMemoryPromptTests(unittest.TestCase):
         manifest = build_prompt_manifest(
             "direct",
             build_model="builder-model",
+            build_temperature=0.0,
+            build_seed=42,
             trajectory_file="/data/alfworld_format_traj.json",
             trajectory_count=300,
         )
 
         self.assertEqual(manifest["schema_version"], 2)
         self.assertEqual(manifest["build_model"], "builder-model")
+        self.assertEqual(manifest["build_temperature"], 0.0)
+        self.assertEqual(manifest["build_seed"], 42)
         self.assertEqual(manifest["trajectory_file"], "/data/alfworld_format_traj.json")
         self.assertEqual(manifest["trajectory_count"], 300)
         self.assertEqual(manifest["prompt"]["version"], PROMPT_VERSION)
