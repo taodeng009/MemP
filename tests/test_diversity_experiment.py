@@ -5,6 +5,7 @@ import unittest
 from pathlib import Path
 
 from ProcedureMem.build_diversity_pools import (
+    extend_quantile_pools,
     generate_unique_subsets,
     mean_nearest_neighbor_squared_l2,
     select_across_quantile_bins,
@@ -49,6 +50,41 @@ class DiversityPoolConstructionTests(unittest.TestCase):
             [3, 3, 3, 3],
         )
         subsets = [tuple(pool["memory_ids"]) for pool in pools]
+        self.assertEqual(len(subsets), len(set(subsets)))
+
+    def test_extension_preserves_existing_pools_and_adds_only_requested_bins(self):
+        candidates = [
+            {"memory_ids": [f"a{index}", f"b{index}"], "diversity": float(index)}
+            for index in range(50)
+        ]
+        existing = select_across_quantile_bins(
+            candidates,
+            bin_count=5,
+            pools_per_bin=1,
+            seed=42,
+        )
+
+        extended = extend_quantile_pools(
+            candidates,
+            existing,
+            bin_count=5,
+            additional_bins=(0, 4),
+            pools_per_bin=1,
+            seed=43,
+        )
+
+        self.assertEqual(len(extended), 7)
+        self.assertTrue(
+            all(pool in extended for pool in existing),
+        )
+        counts = [
+            sum(pool["quantile_bin"] == index for pool in extended)
+            for index in range(5)
+        ]
+        self.assertEqual(counts, [2, 1, 1, 1, 2])
+        self.assertIn("q00_p01", {pool["pool_id"] for pool in extended})
+        self.assertIn("q04_p01", {pool["pool_id"] for pool in extended})
+        subsets = [tuple(pool["memory_ids"]) for pool in extended]
         self.assertEqual(len(subsets), len(set(subsets)))
 
 
