@@ -20,6 +20,7 @@ EVAL_CONDITIONS = CONDITIONS + (
     "edge_raw",
     "cloud_scheduled",
     "online_construction",
+    "diversity_pool",
 )
 SPLIT_NAMES = {
     "valid_seen": "eval_in_distribution",

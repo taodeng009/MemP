@@ -43,6 +43,7 @@ from ProcedureMem.cloud_scheduling import (
     ScheduledWorkflowMemory,
     build_interval_batches,
     candidate_pool_sha256,
+    load_cached_embedding,
     load_candidate_memories,
     memory_id_pool_sha256,
     select_warm_start_ids,
@@ -131,6 +132,8 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--warm-start-memory-file", type=Path)
     parser.add_argument("--online-memory-dir", type=Path)
     parser.add_argument("--candidate-memory-file", type=Path)
+    parser.add_argument("--diversity-pools", type=Path)
+    parser.add_argument("--pool-id")
     parser.add_argument("--alfworld-data")
     parser.add_argument("--config", default=str(DEFAULT_ALFWORLD_CONFIG))
     parser.add_argument("--experiment-name", default="alfworld_paired")
@@ -157,8 +160,24 @@ def _validate_args(parser: argparse.ArgumentParser, args: argparse.Namespace) ->
         parser.error("--edge-capacity is required for --condition edge_raw")
     if args.condition != "edge_raw" and args.edge_capacity is not None:
         parser.error("--edge-capacity is only valid for --condition edge_raw")
-    if args.condition != "edge_raw" and args.score_threshold is not None:
-        parser.error("--score-threshold is only valid for --condition edge_raw")
+    if (
+        args.condition not in {"edge_raw", "diversity_pool"}
+        and args.score_threshold is not None
+    ):
+        parser.error(
+            "--score-threshold is only valid for edge_raw or diversity_pool"
+        )
+    if args.condition == "diversity_pool":
+        if args.diversity_pools is None:
+            parser.error("--diversity-pools is required for diversity_pool")
+        if not args.pool_id:
+            parser.error("--pool-id is required for diversity_pool")
+        if Path(args.pool_id).name != args.pool_id:
+            parser.error("--pool-id must be a name, not a path")
+    elif args.diversity_pools is not None or args.pool_id is not None:
+        parser.error(
+            "--diversity-pools and --pool-id are only valid for diversity_pool"
+        )
     scheduling_args = (
         args.schedule_policy,
         args.interval_size,
@@ -297,37 +316,61 @@ def _load_memory(args: argparse.Namespace):
 
 
 def _load_scheduled_memory(args: argparse.Namespace):
-    from langchain.embeddings import CacheBackedEmbeddings
-    from langchain.storage import LocalFileStore
-
-    from ProcedureMem.llm_api import get_embedding_model
-
     config = load_memory_config(args.memory_config)
     build_policy = config.get("policy", {}).get("build", "direct")
     candidate_path = args.candidate_memory_file or (
         Path(config["memory_dir"]) / build_policy / "documents.json"
     )
     candidates = load_candidate_memories(candidate_path, limit=300)
-    embedding = get_embedding_model()
-    cache_dir = Path(config["memory_dir"]) / "vector_cache"
-    cache_dir.mkdir(parents=True, exist_ok=True)
-    embedding_namespace = (
-        getattr(embedding, "model", None) or embedding.__class__.__name__
-    )
-    cached_embedding = CacheBackedEmbeddings.from_bytes_store(
-        embedding,
-        LocalFileStore(str(cache_dir)),
-        namespace=str(embedding_namespace),
-    )
     memory = ScheduledWorkflowMemory(
         candidates,
-        embedding=cached_embedding,
+        embedding=load_cached_embedding(config["memory_dir"]),
         retrieve_num=args.top_k,
         score_threshold=0.5,
     )
     return memory, Path(candidate_path).expanduser().resolve(), candidate_pool_sha256(
         candidates
     )
+
+
+def _load_diversity_memory(args: argparse.Namespace):
+    manifest_path = args.diversity_pools.expanduser().resolve()
+    manifest = load_json(manifest_path)
+    generation = manifest.get("generation_parameters")
+    pools = manifest.get("pools")
+    if not isinstance(generation, dict) or not isinstance(pools, list):
+        raise ValueError(f"Invalid diversity pool manifest: {manifest_path}")
+    matches = [pool for pool in pools if pool.get("pool_id") == args.pool_id]
+    if len(matches) != 1:
+        raise ValueError(
+            f"Expected exactly one pool_id {args.pool_id!r}, found {len(matches)}"
+        )
+    pool = matches[0]
+    memory_ids = pool.get("memory_ids")
+    pool_size = generation.get("pool_size")
+    if not isinstance(memory_ids, list) or len(memory_ids) != pool_size:
+        raise ValueError(f"Pool {args.pool_id} does not match configured pool_size")
+    if len(memory_ids) != len(set(memory_ids)):
+        raise ValueError(f"Pool {args.pool_id} contains duplicate memory IDs")
+
+    candidate_path = Path(generation["candidate_memory_file"]).expanduser()
+    if not candidate_path.is_absolute():
+        candidate_path = manifest_path.parent / candidate_path
+    candidate_path = candidate_path.resolve()
+    candidate_count = int(generation["candidate_count"])
+    candidates = load_candidate_memories(candidate_path, limit=candidate_count)
+    config = load_memory_config(args.memory_config)
+    memory = ScheduledWorkflowMemory(
+        candidates,
+        embedding=load_cached_embedding(config["memory_dir"]),
+        retrieve_num=args.top_k,
+        score_threshold=(
+            args.score_threshold if args.score_threshold is not None else 0.5
+        ),
+    )
+    memory.activate(memory_ids, interval_id=0)
+    memory.rebuild_available_index()
+    return memory, manifest_path, candidate_path, pool, generation
 
 
 def _load_online_memory(
@@ -550,11 +593,15 @@ def main(argv: Sequence[str] | None = None) -> int:
             "edge_raw",
             "cloud_scheduled",
             "online_construction",
+            "diversity_pool",
         },
     )
     llm, routed_model = _make_llm(settings.model_name, args.temperature, manifest["seed"])
     candidate_memory_path = None
     scheduled_candidate_pool_sha256 = None
+    diversity_manifest_path = None
+    diversity_pool = None
+    diversity_generation = None
     if args.condition in {"memory", "memory_rerank"}:
         memory = _load_memory(args)
     elif args.condition == "edge_raw":
@@ -565,6 +612,20 @@ def main(argv: Sequence[str] | None = None) -> int:
             candidate_memory_path,
             scheduled_candidate_pool_sha256,
         ) = _load_scheduled_memory(args)
+    elif args.condition == "diversity_pool":
+        (
+            memory,
+            diversity_manifest_path,
+            candidate_memory_path,
+            diversity_pool,
+            diversity_generation,
+        ) = _load_diversity_memory(args)
+        if diversity_generation.get("embedding_model") != settings.embedding_model:
+            raise ValueError(
+                "Diversity pools were built with embedding model "
+                f"{diversity_generation.get('embedding_model')!r}, but evaluation "
+                f"uses {settings.embedding_model!r}"
+            )
     elif args.condition == "online_construction":
         memory = None
     else:
@@ -609,6 +670,8 @@ def main(argv: Sequence[str] | None = None) -> int:
         condition_name = f"online_construction_random_seed{args.scheduler_seed}"
     elif args.condition == "online_construction":
         condition_name = f"online_construction_{args.schedule_policy}"
+    elif args.condition == "diversity_pool":
+        condition_name = f"diversity_{args.pool_id}"
     else:
         condition_name = args.condition
 
@@ -681,26 +744,38 @@ def main(argv: Sequence[str] | None = None) -> int:
             args.rerank_top_n if args.condition == "memory_rerank" else args.top_k
         ),
         "score_threshold": (
-            0.5 if args.condition == "online_construction" else args.score_threshold
+            memory.score_threshold
+            if args.condition == "diversity_pool"
+            else 0.5
+            if args.condition == "online_construction"
+            else args.score_threshold
         ),
         "memory_type": (
             "raw_trajectory"
             if args.condition == "edge_raw"
             else "workflow"
             if args.condition
-            in {"memory", "memory_rerank", "cloud_scheduled", "online_construction"}
+            in {
+                "memory",
+                "memory_rerank",
+                "cloud_scheduled",
+                "online_construction",
+                "diversity_pool",
+            }
             else None
         ),
         "retrieval_pipeline": (
             "faiss_then_openmem_rerank"
             if args.condition == "memory_rerank"
             else "faiss_similarity"
-            if args.condition in {"memory", "cloud_scheduled", "online_construction"}
+            if args.condition
+            in {"memory", "cloud_scheduled", "online_construction", "diversity_pool"}
             else None
         ),
         "memory_config": (
             str(Path(args.memory_config).resolve())
-            if args.condition in {"memory", "memory_rerank", "online_construction"}
+            if args.condition
+            in {"memory", "memory_rerank", "online_construction", "diversity_pool"}
             else None
         ),
         "memory_build_model": (
@@ -778,7 +853,43 @@ def main(argv: Sequence[str] | None = None) -> int:
         ),
         "candidate_pool_sha256": scheduled_candidate_pool_sha256,
         "candidate_memory_count": (
-            len(memory.candidates) if args.condition == "cloud_scheduled" else None
+            len(memory.candidates)
+            if args.condition in {"cloud_scheduled", "diversity_pool"}
+            else None
+        ),
+        "diversity_pools": (
+            str(diversity_manifest_path)
+            if args.condition == "diversity_pool"
+            else None
+        ),
+        "pool_id": args.pool_id if args.condition == "diversity_pool" else None,
+        "pool_size": (
+            diversity_generation["pool_size"]
+            if args.condition == "diversity_pool"
+            else None
+        ),
+        "pool_memory_ids": (
+            diversity_pool["memory_ids"]
+            if args.condition == "diversity_pool"
+            else None
+        ),
+        "pool_diversity": (
+            diversity_pool["diversity"]
+            if args.condition == "diversity_pool"
+            else None
+        ),
+        "pool_quantile_bin": (
+            diversity_pool["quantile_bin"]
+            if args.condition == "diversity_pool"
+            else None
+        ),
+        "pool_quantile_range": (
+            diversity_pool["quantile_range"]
+            if args.condition == "diversity_pool"
+            else None
+        ),
+        "pool_generation_parameters": (
+            diversity_generation if args.condition == "diversity_pool" else None
         ),
         "warm_start_count": warm_start_count,
         "warm_start_seed": warm_start_seed,

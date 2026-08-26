@@ -29,6 +29,24 @@ class ScheduleSelection:
     scheduler_scores: dict[str, dict[str, Any]] | None = None
 
 
+def load_cached_embedding(memory_dir: str | Path) -> Any:
+    """Create the repository's embedding client with its existing disk cache."""
+    from langchain.embeddings import CacheBackedEmbeddings
+    from langchain.storage import LocalFileStore
+
+    from ProcedureMem.llm_api import get_embedding_model
+
+    embedding = get_embedding_model()
+    cache_dir = Path(memory_dir).expanduser().resolve() / "vector_cache"
+    cache_dir.mkdir(parents=True, exist_ok=True)
+    namespace = getattr(embedding, "model", None) or embedding.__class__.__name__
+    return CacheBackedEmbeddings.from_bytes_store(
+        embedding,
+        LocalFileStore(str(cache_dir)),
+        namespace=str(namespace),
+    )
+
+
 def load_candidate_memories(
     path: str | Path,
     *,

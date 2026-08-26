@@ -3,3 +3,9 @@ __pycache__/
 .env
 ProcedureMem/Alfworld/results/
 ProcedureMem/memory/
+!docs/
+docs/*
+!docs/alfworld_memory_semantic_diversity_experiment_plan.md
+!scripts/
+scripts/*
+!scripts/run_alfworld_diversity_experiment.sh
