@@ -14,13 +14,14 @@ import numpy as np
 
 from ProcedureMem.cloud_scheduling import (
     GreedyNoveltyScheduler,
+    OracleCoverageScheduler,
     ScheduleSelection,
     load_candidate_memories,
     select_warm_start_ids,
 )
 
 
-ONLINE_POLICIES = ("fifo", "random", "greedy_novelty")
+ONLINE_POLICIES = ("fifo", "random", "greedy_novelty", "oracle_coverage")
 
 
 @dataclass
@@ -134,6 +135,38 @@ def _distance_matrix(
     }
 
 
+def _query_distance_matrix(
+    queries_by_id: Mapping[str, str],
+    task_queries: Sequence[str],
+    embedding: Any,
+) -> dict[str, tuple[float, ...]]:
+    """Return candidate-to-task squared-L2 distances in task-query order."""
+    ordered_ids = list(queries_by_id)
+    queries = [query for query in task_queries if query.strip()]
+    if not queries:
+        raise ValueError("Oracle scheduling requires next-interval task queries")
+    if not ordered_ids:
+        return {}
+    candidate_vectors = np.asarray(
+        embedding.embed_documents(
+            [queries_by_id[item_id] for item_id in ordered_ids]
+        ),
+        dtype=np.float32,
+    )
+    task_vectors = np.asarray(
+        [embedding.embed_query(query) for query in queries],
+        dtype=np.float32,
+    )
+    distances = np.sum(
+        (candidate_vectors[:, np.newaxis, :] - task_vectors[np.newaxis, :, :]) ** 2,
+        axis=2,
+    )
+    return {
+        item_id: tuple(float(value) for value in distances[index])
+        for index, item_id in enumerate(ordered_ids)
+    }
+
+
 def load_warm_start_documents(
     path: str | Path, *, count: int, seed: int
 ) -> tuple[list[Any], tuple[str, ...]]:
@@ -195,8 +228,10 @@ class OnlineConstructionController:
             self.scheduler = FIFOScheduler()
         elif policy == "random":
             self.scheduler = OnlineRandomScheduler(seed=scheduler_seed)
-        else:
+        elif policy == "greedy_novelty":
             self.scheduler = GreedyNoveltyScheduler()
+        else:
+            self.scheduler = OracleCoverageScheduler()
 
     @property
     def available_memory_count(self) -> int:
@@ -256,13 +291,15 @@ class OnlineConstructionController:
             )
         return queries
 
-    def _selection(self) -> ScheduleSelection:
+    def _selection(
+        self, *, next_interval_queries: Sequence[str] | None = None
+    ) -> ScheduleSelection:
         pending_ids = self.queue.pending_ids
         # Capacity zero is the warm-start-only control: successful trajectories
         # are still admitted and logged, but no online memory is constructed.
         if self.capacity == 0:
             return ScheduleSelection(memory_ids=())
-        if self.policy != "greedy_novelty":
+        if self.policy not in {"greedy_novelty", "oracle_coverage"}:
             return self.scheduler.select(pending_ids, self.capacity)
         available_queries = self._available_queries()
         pending_queries = {
@@ -275,6 +312,38 @@ class OnlineConstructionController:
             )
         queries = {**available_queries, **pending_queries}
         embedder = getattr(self.memory, "cached_embedder", self.memory.embedding)
+        if self.policy == "oracle_coverage":
+            if next_interval_queries is None:
+                raise ValueError(
+                    "Oracle coverage requires next-interval task queries"
+                )
+            distances = _query_distance_matrix(
+                queries, next_interval_queries, embedder
+            )
+
+            def distance_scorer(
+                _: Sequence[str], requested_ids: Iterable[str]
+            ) -> dict[str, tuple[float, ...]]:
+                requested = set(requested_ids)
+                unknown = requested - set(distances)
+                if unknown:
+                    raise ValueError(
+                        "Unknown online Oracle IDs: "
+                        + ", ".join(sorted(unknown)[:5])
+                    )
+                return {
+                    item_id: distances[item_id]
+                    for item_id in queries
+                    if item_id in requested
+                }
+
+            return self.scheduler.select(
+                pending_ids,
+                self.capacity,
+                available_ids=available_queries,
+                next_interval_queries=next_interval_queries,
+                distance_scorer=distance_scorer,
+            )
         return self.scheduler.select(
             pending_ids,
             self.capacity,
@@ -282,9 +351,14 @@ class OnlineConstructionController:
             distance_matrix=_distance_matrix(queries, embedder),
         )
 
-    def construct(self, *, interval_id: int) -> dict[str, Any]:
+    def construct(
+        self,
+        *,
+        interval_id: int,
+        next_interval_queries: Sequence[str] | None = None,
+    ) -> dict[str, Any]:
         before_ids = list(self.queue.pending_ids)
-        selection = self._selection()
+        selection = self._selection(next_interval_queries=next_interval_queries)
         selected_ids = list(selection.memory_ids)
         construction_results: list[dict[str, Any]] = []
         for rank, queue_id in enumerate(selected_ids, start=1):
@@ -295,6 +369,9 @@ class OnlineConstructionController:
             score = None
             if selection.scheduler_scores:
                 score = selection.scheduler_scores.get(queue_id)
+            oracle_score = None
+            if selection.oracle_scores:
+                oracle_score = selection.oracle_scores.get(queue_id)
             memory_id = "online_" + queue_id.removeprefix("traj_")
             try:
                 document = self.memory.build_document(
@@ -327,6 +404,7 @@ class OnlineConstructionController:
                     "source_task_id": candidate.task_id,
                     "selection_rank": rank,
                     "scheduler_score": score,
+                    "oracle_score": oracle_score,
                     "waiting_intervals": waiting_intervals,
                     "construction_result": "success",
                     "workflow": document.metadata.get("workflow"),
@@ -342,6 +420,7 @@ class OnlineConstructionController:
                     "source_task_id": candidate.task_id,
                     "selection_rank": rank,
                     "scheduler_score": score,
+                    "oracle_score": oracle_score,
                     "waiting_intervals": waiting_intervals,
                     "construction_result": "failure",
                     "workflow": None,
@@ -357,6 +436,13 @@ class OnlineConstructionController:
             "queue_length_before_selection": len(before_ids),
             "pending_queue_ids_before_selection": before_ids,
             "selected_queue_ids": selected_ids,
+            "scheduler_scores": selection.scheduler_scores,
+            "oracle_scores": selection.oracle_scores,
+            "oracle_next_interval_query_count": (
+                len([query for query in next_interval_queries if query.strip()])
+                if self.policy == "oracle_coverage" and next_interval_queries
+                else None
+            ),
             "queue_length_after_construction": len(self.queue),
             "pending_queue_ids_after_construction": list(self.queue.pending_ids),
             "construction_results": construction_results,

@@ -723,11 +723,12 @@ def maybe_write_scheduling_comparison(
 def maybe_write_online_construction_comparison(
     experiment_dir: str | Path,
 ) -> dict[str, Any] | None:
-    """Compare FIFO and Greedy Novelty online queue runs when both exist."""
+    """Compare FIFO with available online queue scheduling baselines."""
     root = Path(experiment_dir)
     if not root.is_dir():
         return None
     by_policy: dict[str, dict[str, Any]] = {}
+    result_paths: dict[str, Path] = {}
     random_runs: list[dict[str, Any]] = []
     for path in sorted(root.glob("*/summary.json")):
         summary = load_json(path)
@@ -738,19 +739,23 @@ def maybe_write_online_construction_comparison(
         if policy == "random":
             random_runs.append(summary)
             continue
-        if policy in {"fifo", "greedy_novelty"}:
+        if policy in {"fifo", "greedy_novelty", "oracle_coverage"}:
             if policy in by_policy:
                 raise ValueError(
                     f"Online construction comparison has duplicate {policy} runs"
                 )
             by_policy[policy] = summary
-    if set(by_policy) != {"fifo", "greedy_novelty"}:
+            result_paths[policy] = path.parent / "results.jsonl"
+    challengers = [
+        policy
+        for policy in ("greedy_novelty", "oracle_coverage")
+        if policy in by_policy
+    ]
+    if "fifo" not in by_policy or not challengers:
         return None
 
     fifo = by_policy["fifo"]
-    greedy = by_policy["greedy_novelty"]
     fifo_parameters = fifo.get("parameters") or {}
-    greedy_parameters = greedy.get("parameters") or {}
     controlled_keys = (
         "model",
         "agent_api_base_url",
@@ -779,22 +784,47 @@ def maybe_write_online_construction_comparison(
         "warm_start_memory_file",
         "initial_available_memory_ids",
     )
-    if fifo.get("task_ids") != greedy.get("task_ids"):
-        raise ValueError("Online construction runs use different task IDs or order")
-    mismatches = [
-        key
-        for key in controlled_keys
-        if fifo_parameters.get(key) != greedy_parameters.get(key)
-    ]
-    if mismatches:
-        raise ValueError(
-            "Online construction parameter mismatch: " + ", ".join(mismatches)
-        )
+    for policy in challengers:
+        challenger = by_policy[policy]
+        challenger_parameters = challenger.get("parameters") or {}
+        if fifo.get("task_ids") != challenger.get("task_ids"):
+            raise ValueError("Online construction runs use different task IDs or order")
+        mismatches = [
+            key
+            for key in controlled_keys
+            if fifo_parameters.get(key) != challenger_parameters.get(key)
+        ]
+        if mismatches:
+            raise ValueError(
+                "Online construction parameter mismatch: "
+                + ", ".join(mismatches)
+            )
 
     def compact(summary: dict[str, Any]) -> dict[str, Any]:
         online = summary.get("online_construction_summary") or {}
+        intervals = online.get("intervals") or []
+        cumulative_successes = 0
+        cumulative_tasks = 0
+        cumulative_intervals = []
+        for interval in intervals:
+            cumulative_successes += int(interval.get("success_count") or 0)
+            cumulative_tasks += int(interval.get("task_count") or 0)
+            cumulative_intervals.append(
+                {
+                    **interval,
+                    "cumulative_success_count": cumulative_successes,
+                    "cumulative_task_count": cumulative_tasks,
+                    "cumulative_success_rate": (
+                        cumulative_successes / cumulative_tasks
+                        if cumulative_tasks
+                        else None
+                    ),
+                }
+            )
         return {
             "condition": summary["condition"],
+            "task_count": summary.get("task_count"),
+            "success_count": summary.get("success_count"),
             "success_rate": float(summary["success_rate"]),
             "average_steps": float(summary["average_steps"]),
             "arrival_count": online.get("arrival_count"),
@@ -810,27 +840,97 @@ def maybe_write_online_construction_comparison(
             "retrieved_constructed_memory_count": online.get(
                 "retrieved_constructed_memory_count"
             ),
+            "never_retrieved_constructed_memory_count": online.get(
+                "never_retrieved_constructed_memory_count"
+            ),
+            "intervals": cumulative_intervals,
+        }
+
+    def paired_flips(first_policy: str, second_policy: str) -> dict[str, int] | None:
+        first_path = result_paths.get(first_policy)
+        second_path = result_paths.get(second_policy)
+        if (
+            not first_path
+            or not second_path
+            or not first_path.is_file()
+            or not second_path.is_file()
+        ):
+            return None
+
+        def rewards(path: Path) -> dict[str, bool]:
+            return {
+                row["task_id"]: bool(row["reward"])
+                for line in path.read_text(encoding="utf-8").splitlines()
+                if line.strip()
+                for row in [json.loads(line)]
+            }
+
+        first = rewards(first_path)
+        second = rewards(second_path)
+        if list(first) != list(second):
+            raise ValueError("Online construction result rows use different task order")
+        return {
+            "failure_to_success": sum(
+                not first[task_id] and second[task_id] for task_id in first
+            ),
+            "success_to_failure": sum(
+                first[task_id] and not second[task_id] for task_id in first
+            ),
+            "both_success": sum(
+                first[task_id] and second[task_id] for task_id in first
+            ),
+            "both_failure": sum(
+                not first[task_id] and not second[task_id] for task_id in first
+            ),
         }
 
     fifo_run = compact(fifo)
-    greedy_run = compact(greedy)
     comparison = {
         "schema_version": RESULT_SCHEMA_VERSION,
         "experiment_type": "online_construction_queue_scheduling",
         "fifo": fifo_run,
-        "greedy_novelty": greedy_run,
-        "greedy_minus_fifo_success_rate": (
-            greedy_run["success_rate"] - fifo_run["success_rate"]
-        ),
-        "greedy_minus_fifo_success_rate_percentage_points": (
-            greedy_run["success_rate"] - fifo_run["success_rate"]
-        )
-        * 100,
-        "greedy_minus_fifo_average_steps": (
-            greedy_run["average_steps"] - fifo_run["average_steps"]
-        ),
         "random_runs": [compact(summary) for summary in random_runs],
     }
+    if "greedy_novelty" in by_policy:
+        greedy_run = compact(by_policy["greedy_novelty"])
+        comparison.update(
+            {
+                "greedy_novelty": greedy_run,
+                "greedy_minus_fifo_success_rate": (
+                    greedy_run["success_rate"] - fifo_run["success_rate"]
+                ),
+                "greedy_minus_fifo_success_rate_percentage_points": (
+                    greedy_run["success_rate"] - fifo_run["success_rate"]
+                )
+                * 100,
+                "greedy_minus_fifo_average_steps": (
+                    greedy_run["average_steps"] - fifo_run["average_steps"]
+                ),
+                "greedy_vs_fifo_flips": paired_flips(
+                    "fifo", "greedy_novelty"
+                ),
+            }
+        )
+    if "oracle_coverage" in by_policy:
+        oracle_run = compact(by_policy["oracle_coverage"])
+        comparison.update(
+            {
+                "oracle_coverage": oracle_run,
+                "oracle_coverage_minus_fifo_success_rate": (
+                    oracle_run["success_rate"] - fifo_run["success_rate"]
+                ),
+                "oracle_coverage_minus_fifo_success_rate_percentage_points": (
+                    oracle_run["success_rate"] - fifo_run["success_rate"]
+                )
+                * 100,
+                "oracle_coverage_minus_fifo_average_steps": (
+                    oracle_run["average_steps"] - fifo_run["average_steps"]
+                ),
+                "oracle_coverage_vs_fifo_flips": paired_flips(
+                    "fifo", "oracle_coverage"
+                ),
+            }
+        )
     write_json(root / "online_construction_comparison.json", comparison)
     _write_csv(root / "online_construction_comparison.csv", [comparison])
     return comparison

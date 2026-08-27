@@ -19,12 +19,16 @@ class FakeEmbedding:
         "available": [0.0],
         "near": [1.0],
         "far": [10.0],
+        "next-far": [9.0],
         "task-a": [2.0],
         "task-b": [3.0],
     }
 
     def embed_documents(self, texts):
         return [self.vectors[text] for text in texts]
+
+    def embed_query(self, text):
+        return self.vectors[text]
 
 
 class FakeMemory:
@@ -173,8 +177,49 @@ class ControllerTests(unittest.TestCase):
         )
         event = controller.construct(interval_id=0)
         selected = event["selected_queue_ids"][0]
-        self.assertEqual(controller.construction_events[0]["source_task_id"], "task/1")
+        self.assertEqual(
+            controller.construction_events[0]["source_task_id"], "task/1"
+        )
         self.assertNotIn(selected, controller.queue.pending_ids)
+
+    def test_oracle_coverage_selects_best_next_interval_coverage(self):
+        available = SimpleNamespace(
+            page_content="available",
+            metadata={"memory_id": "warm_0", "query": "available"},
+        )
+        controller = OnlineConstructionController(
+            memory=FakeMemory(documents=[available]),
+            policy="oracle_coverage",
+            capacity=1,
+        )
+        controller.admit_results(
+            [result(0, query="near"), result(1, query="far")], interval_id=0
+        )
+
+        event = controller.construct(
+            interval_id=0,
+            next_interval_queries=["next-far"],
+        )
+
+        self.assertEqual(controller.construction_events[0]["source_task_id"], "task/1")
+        self.assertEqual(event["oracle_next_interval_query_count"], 1)
+        selected_id = event["selected_queue_ids"][0]
+        self.assertEqual(
+            event["oracle_scores"][selected_id]["score_type"],
+            "faiss_l2_marginal_gain",
+        )
+        self.assertIsNotNone(
+            controller.construction_events[0]["oracle_score"]
+        )
+
+    def test_oracle_coverage_requires_next_interval_queries(self):
+        controller = OnlineConstructionController(
+            memory=FakeMemory(), policy="oracle_coverage", capacity=1
+        )
+        controller.admit_results([result(0)], interval_id=0)
+
+        with self.assertRaisesRegex(ValueError, "next-interval"):
+            controller.construct(interval_id=0)
 
     def test_final_interval_records_backlog_without_building(self):
         controller = OnlineConstructionController(

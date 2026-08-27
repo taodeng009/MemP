@@ -7,6 +7,17 @@ set -euo pipefail
 # Warm-start-only initial-pool-size sweep (serial execution, no construction):
 #   WARM_START_ONLY=1 WARM_START_COUNTS="0 5 10 20" \
 #     bash scripts/run_alfworld_online_construction.sh
+#
+# FIFO vs Oracle-Coverage smoke test (three intervals):
+#   TASK_COUNT=30 WARM_START_ONLY=0 WARM_START_COUNTS=0 \
+#   POLICIES="fifo oracle_coverage" EXPERIMENT_NAME="online_fifo_oracle_smoke_n30" \
+#     bash scripts/run_alfworld_online_construction.sh
+#
+# FIFO vs Oracle-Coverage 134-task cold-start baseline:
+#   TASK_COUNT=134 WARM_START_ONLY=0 WARM_START_COUNTS=0 \
+#   POLICIES="fifo oracle_coverage" \
+#   EXPERIMENT_NAME="online_construction_valid_unseen_seed42_n134_b10_c2_cold_fifo_oracle" \
+#     bash scripts/run_alfworld_online_construction.sh
 SPLIT="${SPLIT:-valid_unseen}"
 SEED="${SEED:-42}"
 TASK_COUNT="${TASK_COUNT:-50}"

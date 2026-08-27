@@ -121,6 +121,93 @@ class SchedulingComparisonTests(unittest.TestCase):
             with self.assertRaisesRegex(ValueError, "initial_available_memory_ids"):
                 maybe_write_online_construction_comparison(root)
 
+    def test_online_comparison_supports_fifo_and_oracle_coverage(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            common = {
+                "condition_mode": "online_construction",
+                "model": "model",
+                "split": "valid_unseen",
+                "seed": 42,
+                "batch_size": 2,
+                "max_steps": 30,
+                "temperature": 0,
+                "top_k": 3,
+                "manifest_sha256": "manifest",
+                "interval_size": 10,
+                "construction_capacity": 2,
+                "construction_method": "direct",
+                "arrival_policy": "success_only",
+                "warm_start_count": 0,
+                "initial_available_memory_ids": [],
+            }
+            rewards = {
+                "fifo": [False, True],
+                "oracle_coverage": [True, True],
+            }
+            for policy, success_rate, steps in (
+                ("fifo", 0.5, 20.0),
+                ("oracle_coverage", 1.0, 12.0),
+            ):
+                directory = root / policy
+                directory.mkdir()
+                summary = {
+                    "condition": f"online_construction_{policy}",
+                    "task_count": 2,
+                    "success_count": int(success_rate * 2),
+                    "task_ids": ["a", "b"],
+                    "success_rate": success_rate,
+                    "average_steps": steps,
+                    "parameters": dict(common, schedule_policy=policy),
+                    "online_construction_summary": {
+                        "intervals": [
+                            {
+                                "interval_id": 0,
+                                "task_count": 2,
+                                "success_count": int(success_rate * 2),
+                                "success_rate": success_rate,
+                            }
+                        ],
+                        "never_retrieved_constructed_memory_count": 1,
+                    },
+                }
+                (directory / "summary.json").write_text(
+                    json.dumps(summary), encoding="utf-8"
+                )
+                rows = [
+                    {"task_id": task_id, "reward": reward}
+                    for task_id, reward in zip(["a", "b"], rewards[policy])
+                ]
+                (directory / "results.jsonl").write_text(
+                    "".join(json.dumps(row) + "\n" for row in rows),
+                    encoding="utf-8",
+                )
+
+            comparison = maybe_write_online_construction_comparison(root)
+
+            self.assertIsNotNone(comparison)
+            self.assertEqual(
+                comparison[
+                    "oracle_coverage_minus_fifo_success_rate_percentage_points"
+                ],
+                50.0,
+            )
+            self.assertEqual(
+                comparison["oracle_coverage_minus_fifo_average_steps"], -8.0
+            )
+            self.assertEqual(
+                comparison["oracle_coverage_vs_fifo_flips"][
+                    "failure_to_success"
+                ],
+                1,
+            )
+            self.assertEqual(
+                comparison["oracle_coverage"]["intervals"][0][
+                    "cumulative_success_rate"
+                ],
+                1.0,
+            )
+
     def test_comparison_supports_novelty_sum_and_coverage_oracles(self):
         with tempfile.TemporaryDirectory() as temporary:
             root = Path(temporary)

@@ -209,7 +209,8 @@ def _validate_args(parser: argparse.ArgumentParser, args: argparse.Namespace) ->
     elif args.condition == "online_construction":
         if args.schedule_policy not in ONLINE_POLICIES:
             parser.error(
-                "--schedule-policy must be fifo, random, or greedy_novelty "
+                "--schedule-policy must be fifo, random, greedy_novelty, or "
+                "oracle_coverage "
                 "for online_construction"
             )
         if args.interval_size is None or args.interval_size < 1:
@@ -453,6 +454,11 @@ def _online_interval_metrics(
                     "queue_length_before_selection", 0
                 ),
                 "selected_queue_ids": event.get("selected_queue_ids", []),
+                "scheduler_scores": event.get("scheduler_scores"),
+                "oracle_scores": event.get("oracle_scores"),
+                "oracle_next_interval_query_count": event.get(
+                    "oracle_next_interval_query_count"
+                ),
                 "queue_length_after_construction": event.get(
                     "queue_length_after_construction", 0
                 ),
@@ -705,7 +711,15 @@ def main(argv: Sequence[str] | None = None) -> int:
 
     frozen_task_queries: tuple[str, ...] | None = None
     scheduler = None
-    if args.condition == "cloud_scheduled":
+    if (
+        args.condition == "online_construction"
+        and args.schedule_policy == "oracle_coverage"
+    ):
+        frozen_task_queries = _freeze_task_queries(
+            [task["task_id"] for task in manifest["tasks"]],
+            data_root=settings.alfworld_data,
+        )
+    elif args.condition == "cloud_scheduled":
         if args.schedule_policy == "random":
             scheduler = RandomScheduler(
                 memory.candidate_order,
@@ -1203,7 +1217,19 @@ def main(argv: Sequence[str] | None = None) -> int:
                 interval_id=interval_id,
             )
             if batch_end < len(selected_gamefiles):
-                queue_event = online_controller.construct(interval_id=interval_id)
+                next_interval_queries = None
+                if args.schedule_policy == "oracle_coverage":
+                    next_interval_end = min(
+                        batch_end + args.interval_size,
+                        len(selected_gamefiles),
+                    )
+                    next_interval_queries = frozen_task_queries[
+                        batch_end:next_interval_end
+                    ]
+                queue_event = online_controller.construct(
+                    interval_id=interval_id,
+                    next_interval_queries=next_interval_queries,
+                )
             else:
                 queue_event = online_controller.record_final_queue(
                     interval_id=interval_id
@@ -1217,6 +1243,11 @@ def main(argv: Sequence[str] | None = None) -> int:
                             "queue_length_before_selection"
                         ],
                         "selected_queue_ids": queue_event["selected_queue_ids"],
+                        "scheduler_scores": queue_event.get("scheduler_scores"),
+                        "oracle_scores": queue_event.get("oracle_scores"),
+                        "oracle_next_interval_query_count": queue_event.get(
+                            "oracle_next_interval_query_count"
+                        ),
                         "queue_length_after_construction": queue_event[
                             "queue_length_after_construction"
                         ],
@@ -1498,12 +1529,26 @@ def main(argv: Sequence[str] | None = None) -> int:
             )
     online_comparison = maybe_write_online_construction_comparison(experiment_dir)
     if online_comparison:
-        print(
-            "Online FIFO vs Greedy Novelty: "
-            f"{online_comparison['greedy_minus_fifo_success_rate_percentage_points']:+.2f} "
-            "percentage points; average-steps delta "
-            f"{online_comparison['greedy_minus_fifo_average_steps']:+.2f}"
-        )
+        if (
+            "greedy_minus_fifo_success_rate_percentage_points"
+            in online_comparison
+        ):
+            print(
+                "Online FIFO vs Greedy Novelty: "
+                f"{online_comparison['greedy_minus_fifo_success_rate_percentage_points']:+.2f} "
+                "percentage points; average-steps delta "
+                f"{online_comparison['greedy_minus_fifo_average_steps']:+.2f}"
+            )
+        if (
+            "oracle_coverage_minus_fifo_success_rate_percentage_points"
+            in online_comparison
+        ):
+            print(
+                "Online FIFO vs Oracle Coverage: "
+                f"{online_comparison['oracle_coverage_minus_fifo_success_rate_percentage_points']:+.2f} "
+                "percentage points; average-steps delta "
+                f"{online_comparison['oracle_coverage_minus_fifo_average_steps']:+.2f}"
+            )
     return 0
 
 
