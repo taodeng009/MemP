@@ -115,14 +115,7 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--trajectory-file", type=Path, default=DEFAULT_TRAJECTORY_PATH)
     parser.add_argument(
         "--schedule-policy",
-        choices=(
-            "fifo",
-            "random",
-            "greedy_novelty",
-            "oracle_high",
-            "oracle_sum",
-            "oracle_coverage",
-        ),
+        choices=(*ONLINE_POLICIES, "oracle_high", "oracle_sum"),
     )
     parser.add_argument("--interval-size", type=int)
     parser.add_argument("--construction-capacity", type=int)
