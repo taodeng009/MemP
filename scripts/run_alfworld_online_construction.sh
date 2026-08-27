@@ -18,6 +18,12 @@ set -euo pipefail
 #   POLICIES="fifo oracle_coverage" \
 #   EXPERIMENT_NAME="online_construction_valid_unseen_seed42_n134_b10_c2_cold_fifo_oracle" \
 #     bash scripts/run_alfworld_online_construction.sh
+#
+# FIFO vs intra-interval shortest-first, 134-task cold-start:
+#   TASK_COUNT=134 CONSTRUCTION_CAPACITY=3 WARM_START_ONLY=0 WARM_START_COUNTS=0 \
+#   POLICIES="fifo fifo_shortest_first" \
+#   EXPERIMENT_NAME="online_construction_valid_unseen_seed42_n134_b10_c3_fifo_shortest" \
+#     bash scripts/run_alfworld_online_construction.sh
 SPLIT="${SPLIT:-valid_unseen}"
 SEED="${SEED:-42}"
 TASK_COUNT="${TASK_COUNT:-50}"

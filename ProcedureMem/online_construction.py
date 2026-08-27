@@ -21,7 +21,13 @@ from ProcedureMem.cloud_scheduling import (
 )
 
 
-ONLINE_POLICIES = ("fifo", "random", "greedy_novelty", "oracle_coverage")
+ONLINE_POLICIES = (
+    "fifo",
+    "fifo_shortest_first",
+    "random",
+    "greedy_novelty",
+    "oracle_coverage",
+)
 
 
 @dataclass
@@ -32,6 +38,7 @@ class OnlineTrajectoryCandidate:
     task_type: str
     query: str
     trajectory: list[dict[str, str]]
+    steps: int
     arrival_interval: int
     arrival_order: int
     selected_count: int = 0
@@ -94,6 +101,38 @@ class FIFOScheduler:
         if capacity < 1:
             raise ValueError("Construction capacity must be at least 1")
         return ScheduleSelection(memory_ids=tuple(pending_ids)[:capacity])
+
+
+class FIFOShortestFirstScheduler:
+    """Preserve interval FIFO and prefer shorter successes within an interval."""
+
+    def select(
+        self,
+        pending_ids: Iterable[str],
+        capacity: int,
+        *,
+        candidates: Mapping[str, OnlineTrajectoryCandidate],
+        **_: Any,
+    ) -> ScheduleSelection:
+        if capacity < 1:
+            raise ValueError("Construction capacity must be at least 1")
+        ids = list(pending_ids)
+        unknown = set(ids) - set(candidates)
+        if unknown:
+            raise ValueError(
+                "Unknown shortest-first candidates: "
+                + ", ".join(sorted(unknown)[:5])
+            )
+        selected = sorted(
+            ids,
+            key=lambda queue_id: (
+                candidates[queue_id].arrival_interval,
+                candidates[queue_id].steps,
+                candidates[queue_id].task_index,
+                queue_id,
+            ),
+        )[:capacity]
+        return ScheduleSelection(memory_ids=tuple(selected))
 
 
 class OnlineRandomScheduler:
@@ -226,6 +265,8 @@ class OnlineConstructionController:
         self._arrival_order = 0
         if policy == "fifo":
             self.scheduler = FIFOScheduler()
+        elif policy == "fifo_shortest_first":
+            self.scheduler = FIFOShortestFirstScheduler()
         elif policy == "random":
             self.scheduler = OnlineRandomScheduler(seed=scheduler_seed)
         elif policy == "greedy_novelty":
@@ -273,6 +314,7 @@ class OnlineConstructionController:
                 task_type=str(result["task_type"]),
                 query=str(result["query"]),
                 trajectory=list(trajectory),
+                steps=int(result["steps"]),
                 arrival_interval=interval_id,
                 arrival_order=self._arrival_order,
             )
@@ -299,6 +341,15 @@ class OnlineConstructionController:
         # are still admitted and logged, but no online memory is constructed.
         if self.capacity == 0:
             return ScheduleSelection(memory_ids=())
+        if self.policy == "fifo_shortest_first":
+            return self.scheduler.select(
+                pending_ids,
+                self.capacity,
+                candidates={
+                    queue_id: self.queue.get(queue_id)
+                    for queue_id in pending_ids
+                },
+            )
         if self.policy not in {"greedy_novelty", "oracle_coverage"}:
             return self.scheduler.select(pending_ids, self.capacity)
         available_queries = self._available_queries()
@@ -402,6 +453,7 @@ class OnlineConstructionController:
                     "interval_id": interval_id,
                     "queue_id": queue_id,
                     "source_task_id": candidate.task_id,
+                    "source_steps": candidate.steps,
                     "selection_rank": rank,
                     "scheduler_score": score,
                     "oracle_score": oracle_score,
@@ -418,6 +470,7 @@ class OnlineConstructionController:
                     "interval_id": interval_id,
                     "queue_id": queue_id,
                     "source_task_id": candidate.task_id,
+                    "source_steps": candidate.steps,
                     "selection_rank": rank,
                     "scheduler_score": score,
                     "oracle_score": oracle_score,

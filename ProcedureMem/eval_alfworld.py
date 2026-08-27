@@ -209,8 +209,8 @@ def _validate_args(parser: argparse.ArgumentParser, args: argparse.Namespace) ->
     elif args.condition == "online_construction":
         if args.schedule_policy not in ONLINE_POLICIES:
             parser.error(
-                "--schedule-policy must be fifo, random, greedy_novelty, or "
-                "oracle_coverage "
+                "--schedule-policy must be fifo, fifo_shortest_first, random, "
+                "greedy_novelty, or oracle_coverage "
                 "for online_construction"
             )
         if args.interval_size is None or args.interval_size < 1:
@@ -1410,6 +1410,11 @@ def main(argv: Sequence[str] | None = None) -> int:
             int(event["waiting_intervals"])
             for event in online_controller.construction_events
         ]
+        constructed_source_steps = [
+            int(event["source_steps"])
+            for event in online_controller.construction_events
+            if event["construction_result"] == "success"
+        ]
         online_metadata = {
             "policy": args.schedule_policy,
             "construction_method": "direct",
@@ -1447,6 +1452,17 @@ def main(argv: Sequence[str] | None = None) -> int:
                 statistics.fmean(waiting_times) if waiting_times else None
             ),
             "waiting_intervals": waiting_times,
+            "constructed_source_steps_mean": (
+                statistics.fmean(constructed_source_steps)
+                if constructed_source_steps
+                else None
+            ),
+            "constructed_source_steps_median": (
+                statistics.median(constructed_source_steps)
+                if constructed_source_steps
+                else None
+            ),
+            "constructed_source_steps": constructed_source_steps,
             "constructed_memory_count": len(constructed_memory_ids),
             "online_retrieval_count": len(retrieved_online_ids),
             "retrieved_constructed_memory_count": len(retrieved_online_unique),
@@ -1548,6 +1564,16 @@ def main(argv: Sequence[str] | None = None) -> int:
                 f"{online_comparison['oracle_coverage_minus_fifo_success_rate_percentage_points']:+.2f} "
                 "percentage points; average-steps delta "
                 f"{online_comparison['oracle_coverage_minus_fifo_average_steps']:+.2f}"
+            )
+        if (
+            "fifo_shortest_first_minus_fifo_success_rate_percentage_points"
+            in online_comparison
+        ):
+            print(
+                "Online FIFO vs FIFO Shortest First: "
+                f"{online_comparison['fifo_shortest_first_minus_fifo_success_rate_percentage_points']:+.2f} "
+                "percentage points; average-steps delta "
+                f"{online_comparison['fifo_shortest_first_minus_fifo_average_steps']:+.2f}"
             )
     return 0
 

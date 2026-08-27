@@ -6,6 +6,7 @@ from types import SimpleNamespace
 
 from ProcedureMem.online_construction import (
     FIFOScheduler,
+    FIFOShortestFirstScheduler,
     OnlineConstructionController,
     OnlineConstructionQueue,
     OnlineTrajectoryCandidate,
@@ -61,7 +62,9 @@ class FakeMemory:
         self.rebuild_count += 1
 
 
-def result(index, *, reward=True, query=None, action="go to table 1"):
+def result(
+    index, *, reward=True, query=None, action="go to table 1", steps=5
+):
     query = query or f"task-{chr(ord('a') + index)}"
     return {
         "task_id": f"task/{index}",
@@ -69,6 +72,7 @@ def result(index, *, reward=True, query=None, action="go to table 1"):
         "task_type": "pick_and_place_simple",
         "query": query,
         "reward": reward,
+        "steps": steps,
         "trajectory": [
             {"from": "human", "value": f"Your task is to: {query}"},
             {"from": "gpt", "value": f"Action: {action}"},
@@ -96,6 +100,33 @@ class QueueTests(unittest.TestCase):
             trajectory=second["trajectory"],
         )
         self.assertNotEqual(first_id, second_id)
+
+    def test_shortest_first_preserves_interval_fifo(self):
+        candidates = {
+            "new_short": SimpleNamespace(
+                arrival_interval=1, steps=1, task_index=3
+            ),
+            "old_long": SimpleNamespace(
+                arrival_interval=0, steps=10, task_index=0
+            ),
+            "old_short_later": SimpleNamespace(
+                arrival_interval=0, steps=4, task_index=2
+            ),
+            "old_short_earlier": SimpleNamespace(
+                arrival_interval=0, steps=4, task_index=1
+            ),
+        }
+
+        selection = FIFOShortestFirstScheduler().select(
+            candidates,
+            3,
+            candidates=candidates,
+        )
+
+        self.assertEqual(
+            selection.memory_ids,
+            ("old_short_earlier", "old_short_later", "old_long"),
+        )
 
     def test_unknown_queue_item_is_rejected(self):
         queue = OnlineConstructionQueue()
@@ -181,6 +212,31 @@ class ControllerTests(unittest.TestCase):
             controller.construction_events[0]["source_task_id"], "task/1"
         )
         self.assertNotIn(selected, controller.queue.pending_ids)
+
+    def test_fifo_shortest_first_prefers_shorter_within_same_interval(self):
+        controller = OnlineConstructionController(
+            memory=FakeMemory(), policy="fifo_shortest_first", capacity=2
+        )
+        arrived = controller.admit_results(
+            [
+                result(0, steps=9),
+                result(1, steps=4),
+                result(2, steps=6),
+            ],
+            interval_id=0,
+        )
+
+        event = controller.construct(interval_id=0)
+
+        self.assertEqual(
+            event["selected_queue_ids"],
+            [arrived[1], arrived[2]],
+        )
+        self.assertEqual(
+            [item["source_steps"] for item in event["construction_results"]],
+            [4, 6],
+        )
+        self.assertEqual(controller.queue.pending_ids, (arrived[0],))
 
     def test_oracle_coverage_selects_best_next_interval_coverage(self):
         available = SimpleNamespace(

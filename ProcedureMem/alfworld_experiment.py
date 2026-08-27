@@ -739,7 +739,12 @@ def maybe_write_online_construction_comparison(
         if policy == "random":
             random_runs.append(summary)
             continue
-        if policy in {"fifo", "greedy_novelty", "oracle_coverage"}:
+        if policy in {
+            "fifo",
+            "fifo_shortest_first",
+            "greedy_novelty",
+            "oracle_coverage",
+        }:
             if policy in by_policy:
                 raise ValueError(
                     f"Online construction comparison has duplicate {policy} runs"
@@ -748,7 +753,11 @@ def maybe_write_online_construction_comparison(
             result_paths[policy] = path.parent / "results.jsonl"
     challengers = [
         policy
-        for policy in ("greedy_novelty", "oracle_coverage")
+        for policy in (
+            "fifo_shortest_first",
+            "greedy_novelty",
+            "oracle_coverage",
+        )
         if policy in by_policy
     ]
     if "fifo" not in by_policy or not challengers:
@@ -836,6 +845,12 @@ def maybe_write_online_construction_comparison(
             ),
             "final_queue_length": online.get("final_queue_length"),
             "waiting_intervals_mean": online.get("waiting_intervals_mean"),
+            "constructed_source_steps_mean": online.get(
+                "constructed_source_steps_mean"
+            ),
+            "constructed_source_steps_median": online.get(
+                "constructed_source_steps_median"
+            ),
             "online_retrieval_count": online.get("online_retrieval_count"),
             "retrieved_constructed_memory_count": online.get(
                 "retrieved_constructed_memory_count"
@@ -891,6 +906,26 @@ def maybe_write_online_construction_comparison(
         "fifo": fifo_run,
         "random_runs": [compact(summary) for summary in random_runs],
     }
+    if "fifo_shortest_first" in by_policy:
+        shortest_run = compact(by_policy["fifo_shortest_first"])
+        comparison.update(
+            {
+                "fifo_shortest_first": shortest_run,
+                "fifo_shortest_first_minus_fifo_success_rate": (
+                    shortest_run["success_rate"] - fifo_run["success_rate"]
+                ),
+                "fifo_shortest_first_minus_fifo_success_rate_percentage_points": (
+                    shortest_run["success_rate"] - fifo_run["success_rate"]
+                )
+                * 100,
+                "fifo_shortest_first_minus_fifo_average_steps": (
+                    shortest_run["average_steps"] - fifo_run["average_steps"]
+                ),
+                "fifo_shortest_first_vs_fifo_flips": paired_flips(
+                    "fifo", "fifo_shortest_first"
+                ),
+            }
+        )
     if "greedy_novelty" in by_policy:
         greedy_run = compact(by_policy["greedy_novelty"])
         comparison.update(
