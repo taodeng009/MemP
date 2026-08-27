@@ -4,6 +4,7 @@ from ProcedureMem.cloud_scheduling import (
     CandidateMemory,
     GreedyNoveltyScheduler,
     OracleCoverageScheduler,
+    OracleExactRetrievalScheduler,
     OracleHighScheduler,
     RandomScheduler,
     ScheduledWorkflowMemory,
@@ -351,6 +352,86 @@ class SchedulerTests(unittest.TestCase):
         self.assertEqual(
             selection.oracle_scores["mem_0003"]["selection_rank"], 2
         )
+
+    def test_exact_retrieval_oracle_uses_top_k_and_threshold(self):
+        scheduler = OracleExactRetrievalScheduler()
+        distances = {
+            "available-a": (0.10,),
+            "available-b": (0.20,),
+            "available-c": (0.30,),
+            "candidate-enters": (0.15,),
+            "candidate-outside": (0.25,),
+        }
+
+        selection = scheduler.select(
+            {"candidate-enters", "candidate-outside"},
+            1,
+            available_ids={"available-a", "available-b", "available-c"},
+            future_queries=["future"],
+            distance_scorer=lambda _, ids: {
+                memory_id: distances[memory_id] for memory_id in ids
+            },
+            top_k=2,
+            score_threshold=0.5,
+        )
+
+        self.assertEqual(selection.memory_ids, ("candidate-enters",))
+        score = selection.oracle_scores["candidate-enters"]
+        self.assertAlmostEqual(score["total_utility_before"], 0.7)
+        self.assertAlmostEqual(score["total_utility_after"], 0.75)
+        self.assertAlmostEqual(score["value"], 0.05)
+        self.assertEqual(
+            score["score_type"],
+            "faiss_squared_l2_topk_threshold_marginal_gain",
+        )
+
+    def test_exact_retrieval_oracle_recomputes_gains_greedily(self):
+        scheduler = OracleExactRetrievalScheduler()
+        distances = {
+            "available": (0.4, 0.4),
+            "candidate-a": (0.0, 0.4),
+            "candidate-b": (0.1, 0.4),
+            "candidate-c": (0.4, 0.0),
+        }
+
+        selection = scheduler.select(
+            {"candidate-a", "candidate-b", "candidate-c"},
+            2,
+            available_ids={"available"},
+            future_queries=["future-a", "future-b"],
+            distance_scorer=lambda _, ids: {
+                memory_id: distances[memory_id] for memory_id in ids
+            },
+            top_k=1,
+            score_threshold=0.5,
+        )
+
+        self.assertEqual(selection.memory_ids, ("candidate-a", "candidate-c"))
+        self.assertAlmostEqual(selection.oracle_scores["candidate-a"]["value"], 0.4)
+        self.assertAlmostEqual(selection.oracle_scores["candidate-c"]["value"], 0.4)
+
+    def test_exact_retrieval_oracle_zero_gain_uses_stable_ids(self):
+        scheduler = OracleExactRetrievalScheduler()
+        distances = {
+            "candidate-b": (0.8,),
+            "candidate-a": (0.9,),
+            "candidate-c": (1.0,),
+        }
+
+        selection = scheduler.select(
+            distances,
+            2,
+            available_ids=set(),
+            future_queries=["future"],
+            distance_scorer=lambda _, ids: {
+                memory_id: distances[memory_id] for memory_id in ids
+            },
+            top_k=3,
+            score_threshold=0.5,
+        )
+
+        self.assertEqual(selection.memory_ids, ("candidate-a", "candidate-b"))
+        self.assertEqual(selection.oracle_scores["candidate-a"]["value"], 0.0)
 
     def test_capacity_is_respected_and_memory_is_not_selected_twice(self):
         ids = [item.memory_id for item in candidates(5)]

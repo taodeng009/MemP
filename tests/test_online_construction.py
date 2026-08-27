@@ -11,6 +11,8 @@ from ProcedureMem.online_construction import (
     OnlineConstructionQueue,
     OnlineTrajectoryCandidate,
     load_warm_start_documents,
+    oracle_future_query_window,
+    parse_oracle_lookahead_horizon,
     trajectory_queue_id,
 )
 
@@ -33,6 +35,9 @@ class FakeEmbedding:
 
 
 class FakeMemory:
+    retrieve_num = 3
+    score_threshold = 0.5
+
     def __init__(self, *, fail_queries=(), documents=()):
         self.documents = list(documents)
         self.embedding = FakeEmbedding()
@@ -82,6 +87,46 @@ def result(
 
 
 class QueueTests(unittest.TestCase):
+    def test_oracle_horizon_accepts_any_positive_integer_and_all_remaining(self):
+        self.assertEqual(parse_oracle_lookahead_horizon("1"), 1)
+        self.assertEqual(parse_oracle_lookahead_horizon("5"), 5)
+        self.assertEqual(
+            parse_oracle_lookahead_horizon("all_remaining"), "all_remaining"
+        )
+        for invalid in ("0", "-1", "1.5", "everything"):
+            with self.subTest(invalid=invalid):
+                with self.assertRaises(ValueError):
+                    parse_oracle_lookahead_horizon(invalid)
+
+    def test_oracle_future_window_clamps_to_all_remaining(self):
+        queries = tuple(f"q{index}" for index in range(24))
+
+        fixed, fixed_horizon = oracle_future_query_window(
+            queries,
+            current_end=10,
+            interval_size=5,
+            requested_horizon=2,
+        )
+        clamped, clamped_horizon = oracle_future_query_window(
+            queries,
+            current_end=10,
+            interval_size=5,
+            requested_horizon=10,
+        )
+        all_remaining, all_horizon = oracle_future_query_window(
+            queries,
+            current_end=10,
+            interval_size=5,
+            requested_horizon="all_remaining",
+        )
+
+        self.assertEqual(fixed, tuple(f"q{index}" for index in range(10, 20)))
+        self.assertEqual(fixed_horizon, 2)
+        self.assertEqual(clamped, tuple(f"q{index}" for index in range(10, 24)))
+        self.assertEqual(clamped_horizon, 3)
+        self.assertEqual(all_remaining, clamped)
+        self.assertEqual(all_horizon, 3)
+
     def test_fifo_preserves_arrival_order(self):
         selection = FIFOScheduler().select(["q2", "q1", "q3"], 2)
         self.assertEqual(selection.memory_ids, ("q2", "q1"))
@@ -276,6 +321,35 @@ class ControllerTests(unittest.TestCase):
 
         with self.assertRaisesRegex(ValueError, "next-interval"):
             controller.construct(interval_id=0)
+
+    def test_exact_retrieval_oracle_records_horizon_and_retrieval_config(self):
+        controller = OnlineConstructionController(
+            memory=FakeMemory(), policy="oracle_exact_retrieval", capacity=1
+        )
+        controller.admit_results(
+            [result(0, query="near"), result(1, query="next-far")],
+            interval_id=0,
+        )
+
+        event = controller.construct(
+            interval_id=0,
+            future_queries=["next-far"],
+            requested_lookahead_horizon=5,
+            effective_lookahead_horizon=1,
+            future_interval_count=1,
+        )
+
+        self.assertEqual(controller.construction_events[0]["source_task_id"], "task/1")
+        self.assertEqual(event["oracle_requested_lookahead_horizon"], 5)
+        self.assertEqual(event["oracle_effective_lookahead_horizon"], 1)
+        self.assertEqual(event["oracle_future_query_count"], 1)
+        self.assertEqual(event["oracle_retrieval_top_k"], 3)
+        self.assertEqual(event["oracle_retrieval_threshold"], 0.5)
+        selected_id = event["selected_queue_ids"][0]
+        self.assertEqual(
+            event["oracle_scores"][selected_id]["score_type"],
+            "faiss_squared_l2_topk_threshold_marginal_gain",
+        )
 
     def test_final_interval_records_backlog_without_building(self):
         controller = OnlineConstructionController(

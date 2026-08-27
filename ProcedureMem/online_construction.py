@@ -15,6 +15,7 @@ import numpy as np
 from ProcedureMem.cloud_scheduling import (
     GreedyNoveltyScheduler,
     OracleCoverageScheduler,
+    OracleExactRetrievalScheduler,
     ScheduleSelection,
     load_candidate_memories,
     select_warm_start_ids,
@@ -27,7 +28,59 @@ ONLINE_POLICIES = (
     "random",
     "greedy_novelty",
     "oracle_coverage",
+    "oracle_exact_retrieval",
 )
+
+
+def parse_oracle_lookahead_horizon(value: str) -> int | str:
+    """Parse a positive interval horizon or the all-remaining sentinel."""
+    normalized = str(value).strip().lower()
+    if normalized == "all_remaining":
+        return normalized
+    try:
+        horizon = int(normalized)
+    except ValueError as exc:
+        raise ValueError(
+            "Oracle lookahead horizon must be a positive integer or all_remaining"
+        ) from exc
+    if horizon < 1 or str(horizon) != normalized:
+        raise ValueError(
+            "Oracle lookahead horizon must be a positive integer or all_remaining"
+        )
+    return horizon
+
+
+def oracle_future_query_window(
+    task_queries: Sequence[str],
+    *,
+    current_end: int,
+    interval_size: int,
+    requested_horizon: int | str,
+) -> tuple[tuple[str, ...], int]:
+    """Return future queries and the clamped effective interval horizon."""
+    if interval_size < 1:
+        raise ValueError("Interval size must be at least 1")
+    if current_end < 0 or current_end > len(task_queries):
+        raise ValueError("Current interval end is outside the task query sequence")
+    remaining_queries = len(task_queries) - current_end
+    remaining_intervals = (
+        (remaining_queries + interval_size - 1) // interval_size
+        if remaining_queries
+        else 0
+    )
+    if requested_horizon == "all_remaining":
+        effective_horizon = remaining_intervals
+    elif isinstance(requested_horizon, int) and requested_horizon >= 1:
+        effective_horizon = min(requested_horizon, remaining_intervals)
+    else:
+        raise ValueError(
+            "Oracle lookahead horizon must be a positive integer or all_remaining"
+        )
+    future_end = min(
+        current_end + effective_horizon * interval_size,
+        len(task_queries),
+    )
+    return tuple(task_queries[current_end:future_end]), effective_horizon
 
 
 @dataclass
@@ -249,6 +302,8 @@ class OnlineConstructionController:
         policy: str,
         capacity: int,
         scheduler_seed: int = 42,
+        retrieval_top_k: int | None = None,
+        retrieval_score_threshold: float = 0.5,
     ) -> None:
         if policy not in ONLINE_POLICIES:
             raise ValueError(f"Unsupported online scheduling policy: {policy}")
@@ -257,6 +312,12 @@ class OnlineConstructionController:
         self.memory = memory
         self.policy = policy
         self.capacity = capacity
+        self.retrieval_top_k = (
+            int(retrieval_top_k)
+            if retrieval_top_k is not None
+            else int(getattr(memory, "retrieve_num", 0))
+        )
+        self.retrieval_score_threshold = float(retrieval_score_threshold)
         self.queue = OnlineConstructionQueue()
         self.staged_documents: list[Any] = []
         self.queue_events: list[dict[str, Any]] = []
@@ -271,8 +332,10 @@ class OnlineConstructionController:
             self.scheduler = OnlineRandomScheduler(seed=scheduler_seed)
         elif policy == "greedy_novelty":
             self.scheduler = GreedyNoveltyScheduler()
-        else:
+        elif policy == "oracle_coverage":
             self.scheduler = OracleCoverageScheduler()
+        else:
+            self.scheduler = OracleExactRetrievalScheduler()
 
     @property
     def available_memory_count(self) -> int:
@@ -333,8 +396,22 @@ class OnlineConstructionController:
             )
         return queries
 
+    def _exact_retrieval_config(self) -> tuple[int, float]:
+        top_k = self.retrieval_top_k
+        threshold = self.retrieval_score_threshold
+        if top_k < 1:
+            raise ValueError("Exact-retrieval Oracle requires memory retrieve_num >= 1")
+        if threshold < 0:
+            raise ValueError(
+                "Exact-retrieval Oracle requires a non-negative memory score_threshold"
+            )
+        return top_k, threshold
+
     def _selection(
-        self, *, next_interval_queries: Sequence[str] | None = None
+        self,
+        *,
+        next_interval_queries: Sequence[str] | None = None,
+        future_queries: Sequence[str] | None = None,
     ) -> ScheduleSelection:
         pending_ids = self.queue.pending_ids
         # Capacity zero is the warm-start-only control: successful trajectories
@@ -350,7 +427,11 @@ class OnlineConstructionController:
                     for queue_id in pending_ids
                 },
             )
-        if self.policy not in {"greedy_novelty", "oracle_coverage"}:
+        if self.policy not in {
+            "greedy_novelty",
+            "oracle_coverage",
+            "oracle_exact_retrieval",
+        }:
             return self.scheduler.select(pending_ids, self.capacity)
         available_queries = self._available_queries()
         pending_queries = {
@@ -395,6 +476,39 @@ class OnlineConstructionController:
                 next_interval_queries=next_interval_queries,
                 distance_scorer=distance_scorer,
             )
+        if self.policy == "oracle_exact_retrieval":
+            if future_queries is None:
+                raise ValueError(
+                    "Exact-retrieval Oracle requires future task queries"
+                )
+            distances = _query_distance_matrix(queries, future_queries, embedder)
+
+            def exact_distance_scorer(
+                _: Sequence[str], requested_ids: Iterable[str]
+            ) -> dict[str, tuple[float, ...]]:
+                requested = set(requested_ids)
+                unknown = requested - set(distances)
+                if unknown:
+                    raise ValueError(
+                        "Unknown online exact-retrieval Oracle IDs: "
+                        + ", ".join(sorted(unknown)[:5])
+                    )
+                return {
+                    item_id: distances[item_id]
+                    for item_id in queries
+                    if item_id in requested
+                }
+
+            top_k, threshold = self._exact_retrieval_config()
+            return self.scheduler.select(
+                pending_ids,
+                self.capacity,
+                available_ids=available_queries,
+                future_queries=future_queries,
+                distance_scorer=exact_distance_scorer,
+                top_k=top_k,
+                score_threshold=threshold,
+            )
         return self.scheduler.select(
             pending_ids,
             self.capacity,
@@ -407,9 +521,16 @@ class OnlineConstructionController:
         *,
         interval_id: int,
         next_interval_queries: Sequence[str] | None = None,
+        future_queries: Sequence[str] | None = None,
+        requested_lookahead_horizon: int | str | None = None,
+        effective_lookahead_horizon: int | None = None,
+        future_interval_count: int | None = None,
     ) -> dict[str, Any]:
         before_ids = list(self.queue.pending_ids)
-        selection = self._selection(next_interval_queries=next_interval_queries)
+        selection = self._selection(
+            next_interval_queries=next_interval_queries,
+            future_queries=future_queries,
+        )
         selected_ids = list(selection.memory_ids)
         construction_results: list[dict[str, Any]] = []
         for rank, queue_id in enumerate(selected_ids, start=1):
@@ -496,6 +617,36 @@ class OnlineConstructionController:
                 if self.policy == "oracle_coverage" and next_interval_queries
                 else None
             ),
+            "oracle_requested_lookahead_horizon": (
+                requested_lookahead_horizon
+                if self.policy == "oracle_exact_retrieval"
+                else None
+            ),
+            "oracle_effective_lookahead_horizon": (
+                effective_lookahead_horizon
+                if self.policy == "oracle_exact_retrieval"
+                else None
+            ),
+            "oracle_future_interval_count": (
+                future_interval_count
+                if self.policy == "oracle_exact_retrieval"
+                else None
+            ),
+            "oracle_future_query_count": (
+                len([query for query in future_queries if query.strip()])
+                if self.policy == "oracle_exact_retrieval" and future_queries
+                else None
+            ),
+            "oracle_retrieval_top_k": (
+                self._exact_retrieval_config()[0]
+                if self.policy == "oracle_exact_retrieval"
+                else None
+            ),
+            "oracle_retrieval_threshold": (
+                self._exact_retrieval_config()[1]
+                if self.policy == "oracle_exact_retrieval"
+                else None
+            ),
             "queue_length_after_construction": len(self.queue),
             "pending_queue_ids_after_construction": list(self.queue.pending_ids),
             "construction_results": construction_results,
@@ -503,7 +654,12 @@ class OnlineConstructionController:
         self.queue_events.append(queue_event)
         return queue_event
 
-    def record_final_queue(self, *, interval_id: int) -> dict[str, Any]:
+    def record_final_queue(
+        self,
+        *,
+        interval_id: int,
+        requested_lookahead_horizon: int | str | None = None,
+    ) -> dict[str, Any]:
         ids = list(self.queue.pending_ids)
         event = {
             "interval_id": interval_id,
@@ -514,6 +670,30 @@ class OnlineConstructionController:
             "pending_queue_ids_after_construction": ids,
             "construction_results": [],
             "final_interval_no_construction": True,
+            "oracle_requested_lookahead_horizon": (
+                requested_lookahead_horizon
+                if self.policy == "oracle_exact_retrieval"
+                else None
+            ),
+            "oracle_effective_lookahead_horizon": (
+                0 if self.policy == "oracle_exact_retrieval" else None
+            ),
+            "oracle_future_interval_count": (
+                0 if self.policy == "oracle_exact_retrieval" else None
+            ),
+            "oracle_future_query_count": (
+                0 if self.policy == "oracle_exact_retrieval" else None
+            ),
+            "oracle_retrieval_top_k": (
+                self._exact_retrieval_config()[0]
+                if self.policy == "oracle_exact_retrieval"
+                else None
+            ),
+            "oracle_retrieval_threshold": (
+                self._exact_retrieval_config()[1]
+                if self.policy == "oracle_exact_retrieval"
+                else None
+            ),
         }
         self.queue_events.append(event)
         return event

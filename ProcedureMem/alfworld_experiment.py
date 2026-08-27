@@ -739,18 +739,25 @@ def maybe_write_online_construction_comparison(
         if policy == "random":
             random_runs.append(summary)
             continue
+        policy_key = policy
+        if policy == "oracle_exact_retrieval":
+            horizon = parameters.get("oracle_requested_lookahead_horizon")
+            horizon_suffix = "all" if horizon == "all_remaining" else str(horizon)
+            policy_key = f"oracle_exact_retrieval_h{horizon_suffix}"
         if policy in {
             "fifo",
             "fifo_shortest_first",
             "greedy_novelty",
             "oracle_coverage",
+            "oracle_exact_retrieval",
         }:
-            if policy in by_policy:
+            if policy_key in by_policy:
                 raise ValueError(
-                    f"Online construction comparison has duplicate {policy} runs"
+                    "Online construction comparison has duplicate "
+                    f"{policy_key} runs"
                 )
-            by_policy[policy] = summary
-            result_paths[policy] = path.parent / "results.jsonl"
+            by_policy[policy_key] = summary
+            result_paths[policy_key] = path.parent / "results.jsonl"
     challengers = [
         policy
         for policy in (
@@ -760,6 +767,9 @@ def maybe_write_online_construction_comparison(
         )
         if policy in by_policy
     ]
+    challengers.extend(
+        key for key in sorted(by_policy) if key.startswith("oracle_exact_retrieval_h")
+    )
     if "fifo" not in by_policy or not challengers:
         return None
 
@@ -966,6 +976,44 @@ def maybe_write_online_construction_comparison(
                 ),
             }
         )
+    exact_runs = []
+    for policy_key in sorted(by_policy):
+        if not policy_key.startswith("oracle_exact_retrieval_h"):
+            continue
+        exact_run = compact(by_policy[policy_key])
+        exact_parameters = by_policy[policy_key].get("parameters") or {}
+        exact_runs.append(
+            {
+                "run_key": policy_key,
+                "requested_lookahead_horizon": exact_parameters.get(
+                    "oracle_requested_lookahead_horizon"
+                ),
+                "oracle_objective": exact_parameters.get("oracle_objective"),
+                "oracle_objective_version": exact_parameters.get(
+                    "oracle_objective_version"
+                ),
+                "oracle_retrieval_top_k": exact_parameters.get(
+                    "oracle_retrieval_top_k"
+                ),
+                "oracle_retrieval_threshold": exact_parameters.get(
+                    "oracle_retrieval_threshold"
+                ),
+                **exact_run,
+                "minus_fifo_success_rate": (
+                    exact_run["success_rate"] - fifo_run["success_rate"]
+                ),
+                "minus_fifo_success_rate_percentage_points": (
+                    exact_run["success_rate"] - fifo_run["success_rate"]
+                )
+                * 100,
+                "minus_fifo_average_steps": (
+                    exact_run["average_steps"] - fifo_run["average_steps"]
+                ),
+                "vs_fifo_flips": paired_flips("fifo", policy_key),
+            }
+        )
+    if exact_runs:
+        comparison["oracle_exact_retrieval_runs"] = exact_runs
     write_json(root / "online_construction_comparison.json", comparison)
     _write_csv(root / "online_construction_comparison.csv", [comparison])
     return comparison

@@ -652,6 +652,146 @@ class OracleCoverageScheduler:
         )
 
 
+class OracleExactRetrievalScheduler:
+    """Greedily maximize exact Top-K thresholded retrieval utility."""
+
+    SCORE_TYPE = "faiss_squared_l2_topk_threshold_marginal_gain"
+
+    @staticmethod
+    def _top_distances(
+        distances: Iterable[float], *, top_k: int
+    ) -> tuple[float, ...]:
+        return tuple(sorted(float(distance) for distance in distances)[:top_k])
+
+    @staticmethod
+    def _utility(distances: Sequence[float], *, threshold: float) -> float:
+        return float(sum(max(0.0, threshold - distance) for distance in distances))
+
+    def select(
+        self,
+        pending_ids: Iterable[str],
+        capacity: int,
+        *,
+        available_ids: Iterable[str],
+        future_queries: Sequence[str],
+        distance_scorer: Callable[
+            [Sequence[str], Iterable[str]],
+            Mapping[str, Sequence[float]],
+        ],
+        top_k: int,
+        score_threshold: float,
+    ) -> ScheduleSelection:
+        if capacity < 1:
+            raise ValueError("Construction capacity must be at least 1")
+        if top_k < 1:
+            raise ValueError("Retrieval top-k must be at least 1")
+        if score_threshold < 0:
+            raise ValueError("Retrieval score threshold must be non-negative")
+        pending = set(pending_ids)
+        if not pending:
+            return ScheduleSelection(memory_ids=(), oracle_scores={})
+        available = set(available_ids)
+        overlap = pending & available
+        if overlap:
+            raise ValueError(
+                "Available and pending memory IDs overlap: "
+                + ", ".join(sorted(overlap)[:5])
+            )
+
+        queries = [query for query in future_queries if query.strip()]
+        if not queries:
+            raise ValueError("Exact-retrieval Oracle requires future task queries")
+        scored_ids = pending | available
+        distance_matrix = {
+            memory_id: tuple(float(value) for value in values)
+            for memory_id, values in distance_scorer(queries, scored_ids).items()
+        }
+        if set(distance_matrix) != scored_ids:
+            missing = sorted(scored_ids - set(distance_matrix))
+            unknown = sorted(set(distance_matrix) - scored_ids)
+            raise ValueError(
+                "Oracle distance scorer returned the wrong memories: "
+                f"missing={missing[:5]}, unknown={unknown[:5]}"
+            )
+        wrong_lengths = sorted(
+            memory_id
+            for memory_id, distances in distance_matrix.items()
+            if len(distances) != len(queries)
+        )
+        if wrong_lengths:
+            raise ValueError(
+                "Oracle distance scorer returned the wrong query count for: "
+                + ", ".join(wrong_lengths[:5])
+            )
+
+        current_top = [
+            self._top_distances(
+                (
+                    distance_matrix[memory_id][query_index]
+                    for memory_id in available
+                ),
+                top_k=top_k,
+            )
+            for query_index in range(len(queries))
+        ]
+        selected: list[str] = []
+        scores: dict[str, dict[str, Any]] = {}
+        target_count = min(capacity, len(pending))
+        while len(selected) < target_count:
+            total_before = float(
+                sum(
+                    self._utility(distances, threshold=score_threshold)
+                    for distances in current_top
+                )
+            )
+            gains: dict[str, float] = {}
+            candidate_top: dict[str, list[tuple[float, ...]]] = {}
+            for memory_id in pending - set(selected):
+                updated = [
+                    self._top_distances(
+                        (*current_top[query_index], distance_matrix[memory_id][query_index]),
+                        top_k=top_k,
+                    )
+                    for query_index in range(len(queries))
+                ]
+                total_after = float(
+                    sum(
+                        self._utility(distances, threshold=score_threshold)
+                        for distances in updated
+                    )
+                )
+                gains[memory_id] = max(0.0, total_after - total_before)
+                candidate_top[memory_id] = updated
+            next_id = min(
+                gains,
+                key=lambda memory_id: (-gains[memory_id], memory_id),
+            )
+            current_top = candidate_top[next_id]
+            total_after = float(
+                sum(
+                    self._utility(distances, threshold=score_threshold)
+                    for distances in current_top
+                )
+            )
+            selected.append(next_id)
+            scores[next_id] = {
+                "value": gains[next_id],
+                "score_type": self.SCORE_TYPE,
+                "higher_is_better": True,
+                "selection_rank": len(selected),
+                "total_utility_before": total_before,
+                "total_utility_after": total_after,
+                "retrieval_top_k": top_k,
+                "retrieval_threshold": score_threshold,
+                "future_query_count": len(queries),
+            }
+
+        return ScheduleSelection(
+            memory_ids=tuple(selected),
+            oracle_scores=scores,
+        )
+
+
 def summarize_scheduling_intervals(
     results: Sequence[dict[str, Any]],
 ) -> list[dict[str, Any]]:

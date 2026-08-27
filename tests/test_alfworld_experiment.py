@@ -259,6 +259,78 @@ class SchedulingComparisonTests(unittest.TestCase):
                 -2.0,
             )
 
+    def test_online_comparison_keeps_exact_oracle_horizons_separate(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            common = {
+                "condition_mode": "online_construction",
+                "model": "model",
+                "split": "valid_unseen",
+                "seed": 42,
+                "batch_size": 2,
+                "max_steps": 30,
+                "temperature": 0,
+                "top_k": 3,
+                "score_threshold": 0.5,
+                "manifest_sha256": "manifest",
+                "interval_size": 10,
+                "construction_capacity": 3,
+                "construction_method": "direct",
+                "arrival_policy": "success_only",
+                "warm_start_count": 0,
+                "initial_available_memory_ids": [],
+            }
+            runs = (
+                ("fifo", "fifo", None, 0.4, 22.0),
+                ("exact_h1", "oracle_exact_retrieval", 1, 0.5, 20.0),
+                (
+                    "exact_hall",
+                    "oracle_exact_retrieval",
+                    "all_remaining",
+                    0.6,
+                    19.0,
+                ),
+            )
+            for directory_name, policy, horizon, success_rate, steps in runs:
+                directory = root / directory_name
+                directory.mkdir()
+                parameters = dict(common, schedule_policy=policy)
+                if policy == "oracle_exact_retrieval":
+                    parameters.update(
+                        oracle_requested_lookahead_horizon=horizon,
+                        oracle_objective="long_horizon_exact_retrieval",
+                        oracle_objective_version="v1",
+                        oracle_retrieval_top_k=3,
+                        oracle_retrieval_threshold=0.5,
+                    )
+                summary = {
+                    "condition": directory_name,
+                    "task_ids": ["a", "b"],
+                    "success_rate": success_rate,
+                    "average_steps": steps,
+                    "parameters": parameters,
+                }
+                (directory / "summary.json").write_text(
+                    json.dumps(summary), encoding="utf-8"
+                )
+
+            comparison = maybe_write_online_construction_comparison(root)
+
+            exact_runs = comparison["oracle_exact_retrieval_runs"]
+            self.assertEqual(len(exact_runs), 2)
+            self.assertEqual(
+                [run["run_key"] for run in exact_runs],
+                ["oracle_exact_retrieval_h1", "oracle_exact_retrieval_hall"],
+            )
+            self.assertAlmostEqual(
+                exact_runs[0]["minus_fifo_success_rate_percentage_points"],
+                10.0,
+            )
+            self.assertEqual(
+                exact_runs[1]["requested_lookahead_horizon"],
+                "all_remaining",
+            )
+
     def test_comparison_supports_novelty_sum_and_coverage_oracles(self):
         with tempfile.TemporaryDirectory() as temporary:
             root = Path(temporary)

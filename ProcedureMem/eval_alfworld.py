@@ -63,10 +63,19 @@ from ProcedureMem.online_construction import (
     ONLINE_POLICIES,
     OnlineConstructionController,
     load_warm_start_documents,
+    oracle_future_query_window,
+    parse_oracle_lookahead_horizon,
 )
 from ProcedureMem.build_edge_subsets import DEFAULT_OUTPUT as DEFAULT_EDGE_SUBSET_MANIFEST
 from ProcedureMem.benchmark_config import candidate_score_threshold
 from ProcedureMem.reranker import DEFAULT_MODEL, OpenMemReranker
+
+
+def _oracle_horizon_argument(value: str) -> int | str:
+    try:
+        return parse_oracle_lookahead_horizon(value)
+    except ValueError as exc:
+        raise argparse.ArgumentTypeError(str(exc)) from exc
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -120,6 +129,7 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--interval-size", type=int)
     parser.add_argument("--construction-capacity", type=int)
     parser.add_argument("--scheduler-seed", type=int, default=42)
+    parser.add_argument("--oracle-lookahead-horizon", type=_oracle_horizon_argument)
     parser.add_argument("--warm-start-count", type=int)
     parser.add_argument("--warm-start-seed", type=int)
     parser.add_argument("--warm-start-memory-file", type=Path)
@@ -180,6 +190,7 @@ def _validate_args(parser: argparse.ArgumentParser, args: argparse.Namespace) ->
         args.warm_start_seed,
         args.warm_start_memory_file,
         args.online_memory_dir,
+        args.oracle_lookahead_horizon,
     )
     if args.condition == "cloud_scheduled":
         if args.schedule_policy is None:
@@ -192,8 +203,19 @@ def _validate_args(parser: argparse.ArgumentParser, args: argparse.Namespace) ->
             )
         if args.warm_start_count is not None and args.warm_start_count < 0:
             parser.error("--warm-start-count cannot be negative")
-        if args.schedule_policy == "fifo":
-            parser.error("--schedule-policy fifo is only valid for online_construction")
+        if args.schedule_policy in {
+            "fifo",
+            "fifo_shortest_first",
+            "oracle_exact_retrieval",
+        }:
+            parser.error(
+                f"--schedule-policy {args.schedule_policy} is only valid for "
+                "online_construction"
+            )
+        if args.oracle_lookahead_horizon is not None:
+            parser.error(
+                "--oracle-lookahead-horizon is only valid for online_construction"
+            )
         if args.warm_start_memory_file is not None or args.online_memory_dir is not None:
             parser.error(
                 "--warm-start-memory-file and --online-memory-dir are only valid "
@@ -203,8 +225,16 @@ def _validate_args(parser: argparse.ArgumentParser, args: argparse.Namespace) ->
         if args.schedule_policy not in ONLINE_POLICIES:
             parser.error(
                 "--schedule-policy must be fifo, fifo_shortest_first, random, "
-                "greedy_novelty, or oracle_coverage "
+                "greedy_novelty, oracle_coverage, or oracle_exact_retrieval "
                 "for online_construction"
+            )
+        if args.schedule_policy == "oracle_exact_retrieval":
+            if args.oracle_lookahead_horizon is None:
+                args.oracle_lookahead_horizon = 1
+        elif args.oracle_lookahead_horizon is not None:
+            parser.error(
+                "--oracle-lookahead-horizon is only valid with "
+                "--schedule-policy oracle_exact_retrieval"
             )
         if args.interval_size is None or args.interval_size < 1:
             parser.error("--interval-size must be at least 1 for online_construction")
@@ -452,6 +482,22 @@ def _online_interval_metrics(
                 "oracle_next_interval_query_count": event.get(
                     "oracle_next_interval_query_count"
                 ),
+                "oracle_requested_lookahead_horizon": event.get(
+                    "oracle_requested_lookahead_horizon"
+                ),
+                "oracle_effective_lookahead_horizon": event.get(
+                    "oracle_effective_lookahead_horizon"
+                ),
+                "oracle_future_interval_count": event.get(
+                    "oracle_future_interval_count"
+                ),
+                "oracle_future_query_count": event.get(
+                    "oracle_future_query_count"
+                ),
+                "oracle_retrieval_top_k": event.get("oracle_retrieval_top_k"),
+                "oracle_retrieval_threshold": event.get(
+                    "oracle_retrieval_threshold"
+                ),
                 "queue_length_after_construction": event.get(
                     "queue_length_after_construction", 0
                 ),
@@ -667,6 +713,18 @@ def main(argv: Sequence[str] | None = None) -> int:
         condition_name = f"cloud_scheduled_{args.schedule_policy}"
     elif args.condition == "online_construction" and args.schedule_policy == "random":
         condition_name = f"online_construction_random_seed{args.scheduler_seed}"
+    elif (
+        args.condition == "online_construction"
+        and args.schedule_policy == "oracle_exact_retrieval"
+    ):
+        horizon_suffix = (
+            "all"
+            if args.oracle_lookahead_horizon == "all_remaining"
+            else str(args.oracle_lookahead_horizon)
+        )
+        condition_name = (
+            f"online_construction_oracle_exact_retrieval_h{horizon_suffix}"
+        )
     elif args.condition == "online_construction":
         condition_name = f"online_construction_{args.schedule_policy}"
     elif args.condition == "diversity_pool":
@@ -700,13 +758,15 @@ def main(argv: Sequence[str] | None = None) -> int:
             policy=args.schedule_policy,
             capacity=args.construction_capacity,
             scheduler_seed=args.scheduler_seed,
+            retrieval_top_k=args.top_k,
+            retrieval_score_threshold=0.5,
         )
 
     frozen_task_queries: tuple[str, ...] | None = None
     scheduler = None
     if (
         args.condition == "online_construction"
-        and args.schedule_policy == "oracle_coverage"
+        and args.schedule_policy in {"oracle_coverage", "oracle_exact_retrieval"}
     ):
         frozen_task_queries = _freeze_task_queries(
             [task["task_id"] for task in manifest["tasks"]],
@@ -849,6 +909,36 @@ def main(argv: Sequence[str] | None = None) -> int:
         "schedule_policy": args.schedule_policy,
         "interval_size": args.interval_size,
         "construction_capacity": args.construction_capacity,
+        "oracle_objective": (
+            "long_horizon_exact_retrieval"
+            if args.condition == "online_construction"
+            and args.schedule_policy == "oracle_exact_retrieval"
+            else None
+        ),
+        "oracle_objective_version": (
+            "v1"
+            if args.condition == "online_construction"
+            and args.schedule_policy == "oracle_exact_retrieval"
+            else None
+        ),
+        "oracle_requested_lookahead_horizon": (
+            args.oracle_lookahead_horizon
+            if args.condition == "online_construction"
+            and args.schedule_policy == "oracle_exact_retrieval"
+            else None
+        ),
+        "oracle_retrieval_top_k": (
+            online_controller.retrieval_top_k
+            if args.condition == "online_construction"
+            and args.schedule_policy == "oracle_exact_retrieval"
+            else None
+        ),
+        "oracle_retrieval_threshold": (
+            online_controller.retrieval_score_threshold
+            if args.condition == "online_construction"
+            and args.schedule_policy == "oracle_exact_retrieval"
+            else None
+        ),
         "scheduler_seed": (
             args.scheduler_seed
             if args.condition in {"cloud_scheduled", "online_construction"}
@@ -930,12 +1020,18 @@ def main(argv: Sequence[str] | None = None) -> int:
             else "greedy_faiss_l2_marginal_coverage"
             if args.condition == "cloud_scheduled"
             and args.schedule_policy == "oracle_coverage"
+            else "faiss_squared_l2_topk_threshold_marginal_gain"
+            if args.condition == "online_construction"
+            and args.schedule_policy == "oracle_exact_retrieval"
             else None
         ),
         "oracle_higher_is_better": (
             False
             if args.condition == "cloud_scheduled"
             and args.schedule_policy in {"oracle_high", "oracle_sum"}
+            else True
+            if args.condition == "online_construction"
+            and args.schedule_policy == "oracle_exact_retrieval"
             else None
         ),
         "scheduler_score_type": (
@@ -1211,6 +1307,9 @@ def main(argv: Sequence[str] | None = None) -> int:
             )
             if batch_end < len(selected_gamefiles):
                 next_interval_queries = None
+                future_queries = None
+                effective_lookahead_horizon = None
+                future_interval_count = None
                 if args.schedule_policy == "oracle_coverage":
                     next_interval_end = min(
                         batch_end + args.interval_size,
@@ -1219,13 +1318,29 @@ def main(argv: Sequence[str] | None = None) -> int:
                     next_interval_queries = frozen_task_queries[
                         batch_end:next_interval_end
                     ]
+                elif args.schedule_policy == "oracle_exact_retrieval":
+                    (
+                        future_queries,
+                        effective_lookahead_horizon,
+                    ) = oracle_future_query_window(
+                        frozen_task_queries,
+                        current_end=batch_end,
+                        interval_size=args.interval_size,
+                        requested_horizon=args.oracle_lookahead_horizon,
+                    )
+                    future_interval_count = effective_lookahead_horizon
                 queue_event = online_controller.construct(
                     interval_id=interval_id,
                     next_interval_queries=next_interval_queries,
+                    future_queries=future_queries,
+                    requested_lookahead_horizon=args.oracle_lookahead_horizon,
+                    effective_lookahead_horizon=effective_lookahead_horizon,
+                    future_interval_count=future_interval_count,
                 )
             else:
                 queue_event = online_controller.record_final_queue(
-                    interval_id=interval_id
+                    interval_id=interval_id,
+                    requested_lookahead_horizon=args.oracle_lookahead_horizon,
                 )
             queue_event["arrived_queue_ids"] = arrived_ids
             for result in interval_results:
@@ -1240,6 +1355,24 @@ def main(argv: Sequence[str] | None = None) -> int:
                         "oracle_scores": queue_event.get("oracle_scores"),
                         "oracle_next_interval_query_count": queue_event.get(
                             "oracle_next_interval_query_count"
+                        ),
+                        "oracle_requested_lookahead_horizon": queue_event.get(
+                            "oracle_requested_lookahead_horizon"
+                        ),
+                        "oracle_effective_lookahead_horizon": queue_event.get(
+                            "oracle_effective_lookahead_horizon"
+                        ),
+                        "oracle_future_interval_count": queue_event.get(
+                            "oracle_future_interval_count"
+                        ),
+                        "oracle_future_query_count": queue_event.get(
+                            "oracle_future_query_count"
+                        ),
+                        "oracle_retrieval_top_k": queue_event.get(
+                            "oracle_retrieval_top_k"
+                        ),
+                        "oracle_retrieval_threshold": queue_event.get(
+                            "oracle_retrieval_threshold"
                         ),
                         "queue_length_after_construction": queue_event[
                             "queue_length_after_construction"
@@ -1410,6 +1543,15 @@ def main(argv: Sequence[str] | None = None) -> int:
         ]
         online_metadata = {
             "policy": args.schedule_policy,
+            "oracle_objective": parameters["oracle_objective"],
+            "oracle_objective_version": parameters["oracle_objective_version"],
+            "oracle_requested_lookahead_horizon": parameters[
+                "oracle_requested_lookahead_horizon"
+            ],
+            "oracle_retrieval_top_k": parameters["oracle_retrieval_top_k"],
+            "oracle_retrieval_threshold": parameters[
+                "oracle_retrieval_threshold"
+            ],
             "construction_method": "direct",
             "arrival_policy": "success_only",
             "memory_build_model": memory.build_model,
@@ -1557,6 +1699,16 @@ def main(argv: Sequence[str] | None = None) -> int:
                 f"{online_comparison['oracle_coverage_minus_fifo_success_rate_percentage_points']:+.2f} "
                 "percentage points; average-steps delta "
                 f"{online_comparison['oracle_coverage_minus_fifo_average_steps']:+.2f}"
+            )
+        for exact_run in online_comparison.get(
+            "oracle_exact_retrieval_runs", []
+        ):
+            print(
+                "Online FIFO vs Exact-Retrieval Oracle "
+                f"(H={exact_run['requested_lookahead_horizon']}): "
+                f"{exact_run['minus_fifo_success_rate_percentage_points']:+.2f} "
+                "percentage points; average-steps delta "
+                f"{exact_run['minus_fifo_average_steps']:+.2f}"
             )
         if (
             "fifo_shortest_first_minus_fifo_success_rate_percentage_points"

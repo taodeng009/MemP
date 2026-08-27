@@ -24,21 +24,29 @@ set -euo pipefail
 #   POLICIES="fifo fifo_shortest_first" \
 #   EXPERIMENT_NAME="online_construction_valid_unseen_seed42_n134_b10_c3_fifo_shortest" \
 #     bash scripts/run_alfworld_online_construction.sh
+#
+# Long-horizon exact-retrieval Oracle smoke test:
+#   TASK_COUNT=30 CONSTRUCTION_CAPACITY=3 WARM_START_COUNTS=0 \
+#   POLICIES="fifo oracle_exact_retrieval" \
+#   ORACLE_LOOKAHEAD_HORIZONS="1 3 all_remaining" \
+#   EXPERIMENT_NAME="online_exact_oracle_smoke_n30" \
+#     bash scripts/run_alfworld_online_construction.sh
 SPLIT="${SPLIT:-valid_unseen}"
 SEED="${SEED:-42}"
-TASK_COUNT="${TASK_COUNT:-50}"
+TASK_COUNT="${TASK_COUNT:-134}"
 BATCH_SIZE="${BATCH_SIZE:-2}"
 INTERVAL_SIZE="${INTERVAL_SIZE:-10}"
-CONSTRUCTION_CAPACITY="${CONSTRUCTION_CAPACITY:-2}"
-WARM_START_COUNT="${WARM_START_COUNT:-5 10 15 20}"
+CONSTRUCTION_CAPACITY="${CONSTRUCTION_CAPACITY:-3}"
+WARM_START_COUNT="${WARM_START_COUNT:-0}"
 WARM_START_COUNTS="${WARM_START_COUNTS:-$WARM_START_COUNT}"
-WARM_START_ONLY="${WARM_START_ONLY:-1}"
+WARM_START_ONLY="${WARM_START_ONLY:-0}"
 WARM_START_SEED="${WARM_START_SEED:-42}"
 WARM_START_MEMORY_FILE="${WARM_START_MEMORY_FILE:-ProcedureMem/memory/alfworld/direct/documents.json}"
 MAX_STEPS="${MAX_STEPS:-30}"
 TEMPERATURE="${TEMPERATURE:-0}"
 TOP_K="${TOP_K:-3}"
 POLICIES="${POLICIES:-fifo greedy_novelty}"
+ORACLE_LOOKAHEAD_HORIZONS="${ORACLE_LOOKAHEAD_HORIZONS:-1}"
 RUN_RANDOM="${RUN_RANDOM:-0}"
 SCHEDULER_SEED="${SCHEDULER_SEED:-42}"
 
@@ -55,6 +63,18 @@ fi
 for warm_count in "${WARM_COUNTS[@]}"; do
   if [[ ! "$warm_count" =~ ^[0-9]+$ ]]; then
     echo "Invalid warm-start count: $warm_count" >&2
+    exit 2
+  fi
+done
+
+read -r -a ORACLE_HORIZONS <<< "$ORACLE_LOOKAHEAD_HORIZONS"
+if [[ "${#ORACLE_HORIZONS[@]}" -eq 0 ]]; then
+  echo "ORACLE_LOOKAHEAD_HORIZONS must contain at least one horizon" >&2
+  exit 2
+fi
+for horizon in "${ORACLE_HORIZONS[@]}"; do
+  if [[ "$horizon" != "all_remaining" && ! "$horizon" =~ ^[1-9][0-9]*$ ]]; then
+    echo "Invalid Oracle lookahead horizon: $horizon" >&2
     exit 2
   fi
 done
@@ -119,14 +139,30 @@ for warm_count in "${WARM_COUNTS[@]}"; do
   fi
 
   for policy in $run_policies; do
-    condition_name="online_construction_${policy}"
-    if [[ "$WARM_START_ONLY" == "1" ]]; then
-      condition_name="${condition_prefix}_w${warm_count}"
+    policy_horizons=("")
+    if [[ "$policy" == "oracle_exact_retrieval" ]]; then
+      policy_horizons=("${ORACLE_HORIZONS[@]}")
     fi
-    python -m ProcedureMem.eval_alfworld \
-      --schedule-policy "$policy" \
-      --condition-name "$condition_name" \
-      "${common_args[@]}"
+    for horizon in "${policy_horizons[@]}"; do
+      condition_name="online_construction_${policy}"
+      oracle_args=()
+      if [[ "$policy" == "oracle_exact_retrieval" ]]; then
+        horizon_suffix="$horizon"
+        if [[ "$horizon" == "all_remaining" ]]; then
+          horizon_suffix="all"
+        fi
+        condition_name="online_construction_oracle_exact_retrieval_h${horizon_suffix}"
+        oracle_args+=(--oracle-lookahead-horizon "$horizon")
+      fi
+      if [[ "$WARM_START_ONLY" == "1" ]]; then
+        condition_name="${condition_prefix}_w${warm_count}"
+      fi
+      python -m ProcedureMem.eval_alfworld \
+        --schedule-policy "$policy" \
+        --condition-name "$condition_name" \
+        "${oracle_args[@]}" \
+        "${common_args[@]}"
+    done
   done
 
   if [[ "$WARM_START_ONLY" != "1" && "$RUN_RANDOM" == "1" ]]; then
