@@ -23,6 +23,7 @@ EVAL_CONDITIONS = CONDITIONS + (
     "diversity_pool",
 )
 SPLIT_NAMES = {
+    "train": "train",
     "valid_seen": "eval_in_distribution",
     "valid_unseen": "eval_out_of_distribution",
 }

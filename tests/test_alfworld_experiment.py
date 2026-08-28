@@ -15,6 +15,7 @@ from ProcedureMem.alfworld_experiment import (
     maybe_write_online_construction_comparison,
     retrieval_records,
     reranked_retrieval_records,
+    SPLIT_NAMES,
     summarize_results,
     task_query,
     validate_task_manifest,
@@ -518,6 +519,40 @@ class TaskManifestTests(unittest.TestCase):
             task_ids=task_ids,
         )
         self.assertEqual([task["task_id"] for task in manifest["tasks"]], task_ids)
+
+    def test_train_split_builds_and_validates_manifest(self):
+        train_gamefiles = []
+        for index in range(3):
+            path = (
+                self.data_root
+                / "json_2.1.1"
+                / "train"
+                / "pick_and_place_simple"
+                / f"trial_{index}"
+                / "game.tw-pddl"
+            )
+            path.parent.mkdir(parents=True)
+            path.write_text("{}", encoding="utf-8")
+            train_gamefiles.append(path)
+
+        manifest = build_task_manifest(
+            train_gamefiles,
+            data_root=self.data_root,
+            split="train",
+            seed=42,
+            limit_tasks=2,
+        )
+
+        self.assertEqual(SPLIT_NAMES["train"], "train")
+        self.assertEqual(manifest["split"], "train")
+        self.assertEqual(manifest["alfworld_split"], "train")
+        selected = validate_task_manifest(
+            manifest,
+            split="train",
+            available_gamefiles=train_gamefiles,
+            data_root=self.data_root,
+        )
+        self.assertEqual(len(selected), 2)
 
     def test_manifest_rejects_wrong_split_and_missing_task(self):
         manifest = build_task_manifest(
