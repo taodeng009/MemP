@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import csv
+import itertools
 import json
 import math
 from pathlib import Path
@@ -461,6 +462,195 @@ def summarize_candidate_utility(
         "gained_unretrieved_task_ids": [task for task in gained if task not in retrieved_set],
         "lost_unretrieved_task_ids": [task for task in lost if task not in retrieved_set],
     }
+
+
+def summarize_baseline_stability(
+    repeat_results: Sequence[Sequence[Mapping[str, Any]]],
+) -> dict[str, Any]:
+    if len(repeat_results) < 2:
+        raise ValueError("Baseline stability requires at least two repeats")
+    task_ids = [str(row["task_id"]) for row in repeat_results[0]]
+    if not task_ids or len(task_ids) != len(set(task_ids)):
+        raise ValueError("Baseline repeat task IDs must be non-empty and unique")
+
+    normalized_repeats: list[dict[str, Mapping[str, Any]]] = []
+    repeat_summaries = []
+    for repeat_index, results in enumerate(repeat_results, start=1):
+        repeat_ids = [str(row["task_id"]) for row in results]
+        if repeat_ids != task_ids:
+            raise ValueError(
+                f"Baseline repeat {repeat_index} task IDs/order differ"
+            )
+        by_id = {str(row["task_id"]): row for row in results}
+        normalized_repeats.append(by_id)
+        success_count = sum(bool(row["reward"]) for row in results)
+        repeat_summaries.append(
+            {
+                "repeat_id": repeat_index,
+                "success_count": success_count,
+                "success_rate": success_count / len(task_ids),
+                "average_steps": sum(int(row["steps"]) for row in results)
+                / len(task_ids),
+            }
+        )
+
+    pairwise = {
+        "same_retrieval": {
+            "comparisons": 0,
+            "flips": 0,
+            "gained": 0,
+            "lost": 0,
+        },
+        "changed_retrieval": {
+            "comparisons": 0,
+            "flips": 0,
+            "gained": 0,
+            "lost": 0,
+        },
+    }
+    task_rows = []
+    for task_id in task_ids:
+        rows = [repeat[task_id] for repeat in normalized_repeats]
+        outcomes = [bool(row["reward"]) for row in rows]
+        queries = [str(row.get("query") or "") for row in rows]
+        retrievals = [
+            tuple(str(memory_id) for memory_id in row.get("retrieved_memory_ids") or [])
+            for row in rows
+        ]
+        success_count = sum(outcomes)
+        retrieval_variants = []
+        for retrieval in retrievals:
+            rendered = list(retrieval)
+            if rendered not in retrieval_variants:
+                retrieval_variants.append(rendered)
+        task_pair_flips = 0
+        for left_index, right_index in itertools.combinations(range(len(rows)), 2):
+            key = (
+                "same_retrieval"
+                if retrievals[left_index] == retrievals[right_index]
+                else "changed_retrieval"
+            )
+            bucket = pairwise[key]
+            bucket["comparisons"] += 1
+            if outcomes[left_index] == outcomes[right_index]:
+                continue
+            bucket["flips"] += 1
+            task_pair_flips += 1
+            if outcomes[right_index]:
+                bucket["gained"] += 1
+            else:
+                bucket["lost"] += 1
+        task_rows.append(
+            {
+                "task_id": task_id,
+                "success_count": success_count,
+                "success_rate": success_count / len(rows),
+                "outcomes": outcomes,
+                "steps": [int(row["steps"]) for row in rows],
+                "successful_steps": [
+                    int(row["steps"])
+                    for row, success in zip(rows, outcomes)
+                    if success
+                ],
+                "stable_outcome": success_count in {0, len(rows)},
+                "stability_class": (
+                    "stable_success"
+                    if success_count == len(rows)
+                    else "stable_failure"
+                    if success_count == 0
+                    else "unstable"
+                ),
+                "query_stable": len(set(queries)) == 1,
+                "retrieval_stable": len(set(retrievals)) == 1,
+                "retrieval_variants": retrieval_variants,
+                "pairwise_flips": task_pair_flips,
+            }
+        )
+
+    for bucket in pairwise.values():
+        comparisons = int(bucket["comparisons"])
+        bucket["flip_rate"] = (
+            int(bucket["flips"]) / comparisons if comparisons else 0.0
+        )
+    success_counts = [int(row["success_count"]) for row in repeat_summaries]
+    success_mean = sum(success_counts) / len(success_counts)
+    total_pairwise_comparisons = sum(
+        int(bucket["comparisons"]) for bucket in pairwise.values()
+    )
+    total_pairwise_flips = sum(int(bucket["flips"]) for bucket in pairwise.values())
+    return {
+        "repeat_count": len(repeat_results),
+        "task_count": len(task_ids),
+        "repeat_summaries": repeat_summaries,
+        "success_count_mean": success_mean,
+        "success_count_population_std": math.sqrt(
+            sum((value - success_mean) ** 2 for value in success_counts)
+            / len(success_counts)
+        ),
+        "success_count_min": min(success_counts),
+        "success_count_max": max(success_counts),
+        "stable_success_task_count": sum(
+            row["stability_class"] == "stable_success" for row in task_rows
+        ),
+        "stable_failure_task_count": sum(
+            row["stability_class"] == "stable_failure" for row in task_rows
+        ),
+        "unstable_task_count": sum(
+            row["stability_class"] == "unstable" for row in task_rows
+        ),
+        "unstable_task_ids": [
+            row["task_id"] for row in task_rows if row["stability_class"] == "unstable"
+        ],
+        "query_unstable_task_ids": [
+            row["task_id"] for row in task_rows if not row["query_stable"]
+        ],
+        "retrieval_unstable_task_ids": [
+            row["task_id"] for row in task_rows if not row["retrieval_stable"]
+        ],
+        "pairwise": pairwise,
+        "total_pairwise_comparisons": total_pairwise_comparisons,
+        "total_pairwise_flips": total_pairwise_flips,
+        "overall_pairwise_flip_rate": (
+            total_pairwise_flips / total_pairwise_comparisons
+            if total_pairwise_comparisons
+            else 0.0
+        ),
+        "task_stability": task_rows,
+    }
+
+
+def write_baseline_stability_csv(
+    path: str | Path, task_rows: Sequence[Mapping[str, Any]]
+) -> None:
+    fields = (
+        "task_id",
+        "stability_class",
+        "success_count",
+        "success_rate",
+        "pairwise_flips",
+        "query_stable",
+        "retrieval_stable",
+        "outcomes",
+        "steps",
+        "successful_steps",
+        "retrieval_variants",
+    )
+    destination = Path(path)
+    destination.parent.mkdir(parents=True, exist_ok=True)
+    with destination.open("w", encoding="utf-8", newline="") as handle:
+        writer = csv.DictWriter(handle, fieldnames=fields)
+        writer.writeheader()
+        for row in task_rows:
+            writer.writerow(
+                {
+                    field: (
+                        json.dumps(row.get(field), ensure_ascii=False)
+                        if isinstance(row.get(field), (list, dict))
+                        else row.get(field)
+                    )
+                    for field in fields
+                }
+            )
 
 
 def write_utility_csv(path: str | Path, rows: Sequence[Mapping[str, Any]]) -> None:

@@ -27,8 +27,10 @@ from ProcedureMem.candidate_utility import (
     load_snapshot,
     load_workflow_cache,
     stratified_proxy_selection,
+    summarize_baseline_stability,
     summarize_candidate_utility,
     validate_workflow_cache,
+    write_baseline_stability_csv,
     write_jsonl,
     write_task_manifest,
     write_utility_csv,
@@ -57,6 +59,17 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--output-dir", type=Path, required=True)
     parser.add_argument("--candidate-workflow-cache", type=Path)
     parser.add_argument("--build-candidate-workflows", action="store_true")
+    parser.add_argument(
+        "--baseline-only",
+        action="store_true",
+        help="Run only repeated frozen-baseline conditions",
+    )
+    parser.add_argument(
+        "--baseline-repeats",
+        type=int,
+        default=5,
+        help="Number of repeats for --baseline-only (default: 5)",
+    )
     parser.add_argument("--candidate-count", type=int, default=6)
     parser.add_argument("--candidate-queue-ids", nargs="+")
     parser.add_argument("--batch-size", type=int)
@@ -502,6 +515,105 @@ def _write_condition_results(directory: Path, results: Sequence[Mapping[str, Any
     )
 
 
+def _evaluate_baseline_stability(
+    args: argparse.Namespace,
+    snapshot: Mapping[str, Any],
+    settings: Mapping[str, Any],
+    output_dir: Path,
+) -> None:
+    repeat_count = int(args.baseline_repeats)
+    if repeat_count < 2:
+        raise ValueError("--baseline-repeats must be at least 2")
+    occupied = [
+        child.name for child in output_dir.iterdir() if child.name != "embedding_cache"
+    ]
+    if occupied:
+        raise FileExistsError(
+            "Baseline stability output directory is not empty: "
+            + ", ".join(sorted(occupied)[:5])
+        )
+    repeat_root = output_dir / "baseline_repeats"
+    if repeat_root.exists() and any(repeat_root.iterdir()):
+        raise FileExistsError(f"Baseline repeat output already exists: {repeat_root}")
+
+    write_task_manifest(output_dir / "task_manifest.json", snapshot)
+    write_json(
+        output_dir / "baseline_stability_experiment.json",
+        {
+            "schema_version": 1,
+            "mode": "baseline_stability",
+            "source_run_dir": snapshot["source_run_dir"],
+            "snapshot_interval": snapshot["snapshot_interval"],
+            "downstream_interval": snapshot["downstream_interval"],
+            "baseline_memory_ids": [
+                row["memory_id"] for row in snapshot["baseline_memories"]
+            ],
+            "downstream_task_ids": list(snapshot["downstream_task_ids"]),
+            "repeat_count": repeat_count,
+            "evaluation_settings": dict(settings),
+            "same_seed_each_repeat": True,
+            "online_update_enabled": False,
+            "reflection_enabled": False,
+            "construction_enabled": False,
+        },
+    )
+
+    runtime = configure_runtime(
+        model_name=str(settings["model"]),
+        alfworld_data=args.alfworld_data,
+        require_llm=True,
+        require_embedding=True,
+    )
+    embedding = load_cached_embedding(output_dir / "embedding_cache")
+    examples = json.loads(DEFAULT_EXAMPLES_PATH.read_text(encoding="utf-8"))
+    all_results = []
+    routed_models = []
+    for repeat_index in range(1, repeat_count + 1):
+        llm, routed_model = _make_llm(
+            str(runtime.model_name),
+            float(settings["temperature"]),
+            int(settings["seed"]),
+        )
+        routed_models.append(routed_model)
+        memory, _ = _condition_memory(snapshot, embedding, settings)
+        results = _run_condition(
+            condition_name=f"baseline_repeat_{repeat_index:03d}",
+            candidate_memory_id=None,
+            memory=memory,
+            snapshot=snapshot,
+            settings=settings,
+            args=args,
+            llm=llm,
+            examples=examples,
+        )
+        for row in results:
+            row["baseline_repeat_id"] = repeat_index
+        _write_condition_results(
+            repeat_root / f"repeat_{repeat_index:03d}", results
+        )
+        all_results.append(results)
+
+    stability = summarize_baseline_stability(all_results)
+    stability.update(
+        {
+            "routed_models": routed_models,
+            "snapshot_interval": snapshot["snapshot_interval"],
+            "downstream_interval": snapshot["downstream_interval"],
+            "evaluation_settings": dict(settings),
+        }
+    )
+    write_json(output_dir / "baseline_stability.json", stability)
+    write_baseline_stability_csv(
+        output_dir / "baseline_task_stability.csv",
+        stability["task_stability"],
+    )
+    write_json(
+        output_dir / "summary.json",
+        {key: value for key, value in stability.items() if key != "task_stability"},
+    )
+    print(f"Baseline stability results: {output_dir / 'baseline_stability.json'}")
+
+
 def _evaluate(
     args: argparse.Namespace,
     snapshot: Mapping[str, Any],
@@ -614,6 +726,12 @@ def _evaluate(
 
 def main(argv: Sequence[str] | None = None) -> int:
     args = build_parser().parse_args(argv)
+    if args.build_candidate_workflows and args.baseline_only:
+        raise ValueError(
+            "--build-candidate-workflows and --baseline-only are mutually exclusive"
+        )
+    if args.baseline_only and int(args.baseline_repeats) < 2:
+        raise ValueError("--baseline-repeats must be at least 2")
     snapshot = load_snapshot(args.source_run_dir, args.snapshot_interval)
     settings = _resolve_settings(args, snapshot)
     output_dir = args.output_dir.expanduser().resolve()
@@ -625,6 +743,8 @@ def main(argv: Sequence[str] | None = None) -> int:
     )
     if args.build_candidate_workflows:
         _prepare_candidates(args, snapshot, settings, output_dir, cache_path)
+    elif args.baseline_only:
+        _evaluate_baseline_stability(args, snapshot, settings, output_dir)
     else:
         _evaluate(args, snapshot, settings, output_dir, cache_path)
     return 0

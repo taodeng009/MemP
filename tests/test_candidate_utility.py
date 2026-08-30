@@ -8,6 +8,7 @@ from ProcedureMem.candidate_utility import (
     coverage_proxy_scores,
     load_snapshot,
     stratified_proxy_selection,
+    summarize_baseline_stability,
     summarize_candidate_utility,
     validate_workflow_cache,
 )
@@ -231,6 +232,78 @@ class CandidateUtilityTests(unittest.TestCase):
         self.assertEqual(summary["gained_retrieved_task_ids"], ["a"])
         self.assertEqual(summary["lost_retrieved_task_ids"], ["b"])
         self.assertEqual(summary["gained_unretrieved_task_ids"], ["c"])
+
+    def test_baseline_stability_separates_same_and_changed_retrieval_flips(self):
+        repeats = [
+            [
+                {
+                    "task_id": "a",
+                    "reward": True,
+                    "steps": 5,
+                    "query": "qa",
+                    "retrieved_memory_ids": ["m1"],
+                },
+                {
+                    "task_id": "b",
+                    "reward": False,
+                    "steps": 30,
+                    "query": "qb",
+                    "retrieved_memory_ids": ["m2"],
+                },
+            ],
+            [
+                {
+                    "task_id": "a",
+                    "reward": False,
+                    "steps": 30,
+                    "query": "qa",
+                    "retrieved_memory_ids": ["m1"],
+                },
+                {
+                    "task_id": "b",
+                    "reward": False,
+                    "steps": 30,
+                    "query": "qb",
+                    "retrieved_memory_ids": ["other"],
+                },
+            ],
+            [
+                {
+                    "task_id": "a",
+                    "reward": True,
+                    "steps": 6,
+                    "query": "qa",
+                    "retrieved_memory_ids": ["m1"],
+                },
+                {
+                    "task_id": "b",
+                    "reward": True,
+                    "steps": 8,
+                    "query": "qb",
+                    "retrieved_memory_ids": ["m2"],
+                },
+            ],
+        ]
+
+        summary = summarize_baseline_stability(repeats)
+
+        self.assertEqual(summary["repeat_count"], 3)
+        self.assertEqual(
+            [row["success_count"] for row in summary["repeat_summaries"]],
+            [1, 0, 2],
+        )
+        self.assertEqual(summary["unstable_task_count"], 2)
+        self.assertEqual(summary["total_pairwise_comparisons"], 6)
+        self.assertEqual(summary["total_pairwise_flips"], 4)
+        self.assertEqual(
+            summary["pairwise"]["same_retrieval"]["comparisons"], 4
+        )
+        self.assertEqual(summary["pairwise"]["same_retrieval"]["flips"], 3)
+        self.assertEqual(
+            summary["pairwise"]["changed_retrieval"]["comparisons"], 2
+        )
+        self.assertEqual(summary["pairwise"]["changed_retrieval"]["flips"], 1)
+        self.assertEqual(summary["retrieval_unstable_task_ids"], ["b"])
 
 
 if __name__ == "__main__":
