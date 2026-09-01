@@ -16,7 +16,10 @@ from ProcedureMem.online_construction import (
     parse_oracle_lookahead_horizon,
     trajectory_queue_id,
 )
-from ProcedureMem.cloud_scheduling import OracleExactRetrievalScheduler
+from ProcedureMem.cloud_scheduling import (
+    OracleCoverageScheduler,
+    OracleExactRetrievalScheduler,
+)
 
 
 class FakeEmbedding:
@@ -555,6 +558,241 @@ class HistoricalUtilityTests(unittest.TestCase):
         )
 
         self.assertEqual(corrected.memory_ids, baseline.memory_ids)
+
+    def test_alpha_zero_matches_exact_retrieval(self):
+        distances = {
+            "available": (0.4,),
+            "candidate_a": (0.1,),
+            "candidate_b": (0.2,),
+        }
+
+        def distance_scorer(_queries, requested_ids):
+            return {memory_id: distances[memory_id] for memory_id in requested_ids}
+
+        scheduler = OracleExactRetrievalScheduler()
+        baseline = scheduler.select(
+            ["candidate_a", "candidate_b"],
+            2,
+            available_ids=["available"],
+            future_queries=["future"],
+            distance_scorer=distance_scorer,
+            top_k=1,
+            score_threshold=0.5,
+        )
+        normalized = scheduler.select(
+            ["candidate_a", "candidate_b"],
+            2,
+            available_ids=["available"],
+            future_queries=["future"],
+            distance_scorer=distance_scorer,
+            top_k=1,
+            score_threshold=0.5,
+            historical_utility_estimates={
+                "candidate_a": 0.0,
+                "candidate_b": 1.0,
+            },
+            historical_reference_count=1,
+            historical_utility_alpha=0.0,
+        )
+
+        self.assertEqual(normalized.memory_ids, baseline.memory_ids)
+
+    def test_exact_v2_normalizes_each_greedy_rank(self):
+        distances = {
+            "available": (0.4,),
+            "candidate_a": (0.1,),
+            "candidate_b": (0.2,),
+            "candidate_c": (0.3,),
+        }
+
+        def distance_scorer(_queries, requested_ids):
+            return {memory_id: distances[memory_id] for memory_id in requested_ids}
+
+        selection = OracleExactRetrievalScheduler().select(
+            ["candidate_a", "candidate_b", "candidate_c"],
+            2,
+            available_ids=["available"],
+            future_queries=["future"],
+            distance_scorer=distance_scorer,
+            top_k=2,
+            score_threshold=0.5,
+            historical_utility_estimates={
+                "candidate_a": 0.0,
+                "candidate_b": 0.0,
+                "candidate_c": 0.0,
+            },
+            historical_utility_alpha=1.0,
+            gain_normalization_epsilon=1e-8,
+        )
+
+        self.assertEqual(selection.memory_ids, ("candidate_a", "candidate_b"))
+        first = selection.oracle_scores["candidate_a"]
+        second = selection.oracle_scores["candidate_b"]
+        self.assertAlmostEqual(first["base_gain"], 0.4)
+        self.assertAlmostEqual(first["normalized_base_gain"], 1.0)
+        self.assertAlmostEqual(second["base_gain"], 0.2)
+        self.assertAlmostEqual(second["normalized_base_gain"], 1.0)
+
+    def test_exact_v2_uses_hu_when_all_base_gains_are_zero(self):
+        distances = {
+            "available": (0.1,),
+            "candidate_a": (0.2,),
+            "candidate_b": (0.3,),
+        }
+
+        def distance_scorer(_queries, requested_ids):
+            return {memory_id: distances[memory_id] for memory_id in requested_ids}
+
+        selection = OracleExactRetrievalScheduler().select(
+            ["candidate_a", "candidate_b"],
+            1,
+            available_ids=["available"],
+            future_queries=["future"],
+            distance_scorer=distance_scorer,
+            top_k=1,
+            score_threshold=0.5,
+            historical_utility_estimates={
+                "candidate_a": 0.2,
+                "candidate_b": 0.9,
+            },
+            historical_utility_alpha=1.0,
+        )
+
+        self.assertEqual(selection.memory_ids, ("candidate_b",))
+        score = selection.oracle_scores["candidate_b"]
+        self.assertEqual(score["base_gain"], 0.0)
+        self.assertEqual(score["normalized_base_gain"], 0.0)
+        self.assertAlmostEqual(score["adjusted_score"], 0.9)
+
+    def test_coverage_v2_alpha_zero_matches_original(self):
+        distances = {
+            "available": (10.0,),
+            "candidate_a": (8.0,),
+            "candidate_b": (9.0,),
+        }
+
+        def distance_scorer(_queries, requested_ids):
+            return {memory_id: distances[memory_id] for memory_id in requested_ids}
+
+        scheduler = OracleCoverageScheduler()
+        baseline = scheduler.select(
+            ["candidate_a", "candidate_b"],
+            2,
+            available_ids=["available"],
+            next_interval_queries=["future"],
+            distance_scorer=distance_scorer,
+        )
+        normalized = scheduler.select(
+            ["candidate_a", "candidate_b"],
+            2,
+            available_ids=["available"],
+            next_interval_queries=["future"],
+            distance_scorer=distance_scorer,
+            historical_utility_estimates={
+                "candidate_a": 0.0,
+                "candidate_b": 1.0,
+            },
+            historical_utility_alpha=0.0,
+        )
+
+        self.assertEqual(normalized.memory_ids, baseline.memory_ids)
+
+    def test_coverage_v2_uses_hu_when_all_base_gains_are_zero(self):
+        distances = {
+            "available": (0.0,),
+            "candidate_a": (1.0,),
+            "candidate_b": (2.0,),
+        }
+
+        def distance_scorer(_queries, requested_ids):
+            return {memory_id: distances[memory_id] for memory_id in requested_ids}
+
+        selection = OracleCoverageScheduler().select(
+            ["candidate_a", "candidate_b"],
+            1,
+            available_ids=["available"],
+            next_interval_queries=["future"],
+            distance_scorer=distance_scorer,
+            historical_utility_estimates={
+                "candidate_a": 0.1,
+                "candidate_b": 0.8,
+            },
+            historical_utility_alpha=1.0,
+        )
+
+        self.assertEqual(selection.memory_ids, ("candidate_b",))
+        score = selection.oracle_scores["candidate_b"]
+        self.assertEqual(score["base_gain"], 0.0)
+        self.assertEqual(score["normalized_base_gain"], 0.0)
+        self.assertAlmostEqual(score["adjusted_score"], 0.8)
+
+    def test_controller_records_v2_parameters_and_scores(self):
+        warm = SimpleNamespace(
+            page_content="available",
+            metadata={"memory_id": "warm_0", "query": "available"},
+        )
+        controller = OnlineConstructionController(
+            memory=FakeMemory(documents=[warm]),
+            policy="oracle_exact_retrieval_historical_utility_v2",
+            capacity=1,
+            historical_utility_min_count=1,
+            historical_utility_alpha=0.25,
+            historical_utility_epsilon=1e-6,
+            gain_normalization_epsilon=1e-7,
+        )
+        controller.record_retrieval_outcomes(
+            [{"retrieved_memory_ids": ["warm_0"], "reward": True}]
+        )
+        controller.admit_results(
+            [result(0, query="near"), result(1, query="far")], interval_id=0
+        )
+
+        controller.construct(interval_id=0, future_queries=["next-far"])
+        event = controller.construction_events[0]
+
+        self.assertEqual(controller.historical_utility_alpha, 0.25)
+        self.assertEqual(controller.gain_normalization_epsilon, 1e-7)
+        self.assertEqual(event["historical_reference_count"], 1)
+        self.assertIn("base_gain", event)
+        self.assertIn("normalized_base_gain", event)
+        self.assertAlmostEqual(
+            event["adjusted_score"],
+            event["normalized_base_gain"]
+            + 0.25 * event["historical_utility_estimate"],
+        )
+
+    def test_coverage_v2_controller_records_normalized_score(self):
+        warm = SimpleNamespace(
+            page_content="available",
+            metadata={"memory_id": "warm_0", "query": "available"},
+        )
+        controller = OnlineConstructionController(
+            memory=FakeMemory(documents=[warm]),
+            policy="oracle_coverage_historical_utility_v2",
+            capacity=1,
+            historical_utility_min_count=1,
+            historical_utility_alpha=0.5,
+        )
+        controller.record_retrieval_outcomes(
+            [{"retrieved_memory_ids": ["warm_0"], "reward": True}]
+        )
+        controller.admit_results(
+            [result(0, query="near"), result(1, query="far")], interval_id=0
+        )
+
+        queue_event = controller.construct(
+            interval_id=0,
+            next_interval_queries=["next-far"],
+        )
+        event = controller.construction_events[0]
+
+        self.assertEqual(event["historical_reference_count"], 1)
+        self.assertAlmostEqual(event["historical_utility_estimate"], 1.0)
+        self.assertAlmostEqual(
+            event["adjusted_score"],
+            event["normalized_base_gain"] + 0.5,
+        )
+        self.assertEqual(queue_event["oracle_next_interval_query_count"], 1)
 
 
 if __name__ == "__main__":

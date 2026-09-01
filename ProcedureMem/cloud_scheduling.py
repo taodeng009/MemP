@@ -548,9 +548,19 @@ class OracleCoverageScheduler:
             [Sequence[str], Iterable[str]],
             Mapping[str, Sequence[float]],
         ],
+        historical_utility_estimates: Mapping[str, float] | None = None,
+        historical_reference_count: int = 0,
+        historical_utility_alpha: float | None = None,
+        gain_normalization_epsilon: float = 1e-8,
     ) -> ScheduleSelection:
         if capacity < 1:
             raise ValueError("Construction capacity must be at least 1")
+        if historical_utility_alpha is not None and historical_utility_alpha < 0:
+            raise ValueError("Historical utility alpha must be non-negative")
+        if gain_normalization_epsilon <= 0:
+            raise ValueError("Gain normalization epsilon must be positive")
+        if historical_reference_count < 0:
+            raise ValueError("Historical reference count cannot be negative")
         pending = set(pending_ids)
         if not pending:
             return ScheduleSelection(memory_ids=(), oracle_scores={})
@@ -561,6 +571,21 @@ class OracleCoverageScheduler:
                 "Available and pending memory IDs overlap: "
                 + ", ".join(sorted(overlap)[:5])
             )
+        estimates = {
+            memory_id: float(value)
+            for memory_id, value in (historical_utility_estimates or {}).items()
+        }
+        unknown_estimates = set(estimates) - pending
+        if unknown_estimates:
+            raise ValueError(
+                "Historical utility estimates contain unknown candidates: "
+                + ", ".join(sorted(unknown_estimates)[:5])
+            )
+        for memory_id, value in estimates.items():
+            if not 0.0 <= value <= 1.0:
+                raise ValueError(
+                    f"Historical utility estimate for {memory_id} must be in [0, 1]"
+                )
 
         scored_ids = pending | available
         distance_matrix = {
@@ -612,6 +637,19 @@ class OracleCoverageScheduler:
                 "higher_is_better": False,
                 "selection_rank": 1,
             }
+            if historical_utility_alpha is not None:
+                scores[first_id].update(
+                    {
+                        "base_gain": None,
+                        "normalized_base_gain": None,
+                        "historical_utility_estimate": 0.0,
+                        "historical_reference_count": 0,
+                        "historical_utility_alpha": historical_utility_alpha,
+                        "adjusted_score": None,
+                        "gain_normalization_epsilon": gain_normalization_epsilon,
+                        "coverage_bootstrap": True,
+                    }
+                )
             best_distances = list(distance_matrix[first_id])
 
         target_count = min(capacity, len(pending))
@@ -630,17 +668,49 @@ class OracleCoverageScheduler:
                 )
                 for memory_id in remaining
             }
+            if historical_utility_alpha is None:
+                normalized_gains = dict(marginal_gains)
+                adjusted_scores = dict(marginal_gains)
+            else:
+                max_gain = max(marginal_gains.values(), default=0.0)
+                denominator = max_gain + gain_normalization_epsilon
+                normalized_gains = {
+                    memory_id: gain / denominator
+                    for memory_id, gain in marginal_gains.items()
+                }
+                adjusted_scores = {
+                    memory_id: normalized_gains[memory_id]
+                    + historical_utility_alpha * estimates.get(memory_id, 0.0)
+                    for memory_id in remaining
+                }
             next_id = min(
                 remaining,
-                key=lambda memory_id: (-marginal_gains[memory_id], memory_id),
+                key=lambda memory_id: (-adjusted_scores[memory_id], memory_id),
             )
             selected.append(next_id)
             scores[next_id] = {
-                "value": marginal_gains[next_id],
-                "score_type": "faiss_l2_marginal_gain",
+                "value": adjusted_scores[next_id],
+                "score_type": (
+                    "normalized_coverage_historical_utility"
+                    if historical_utility_alpha is not None
+                    else "faiss_l2_marginal_gain"
+                ),
                 "higher_is_better": True,
                 "selection_rank": len(selected),
             }
+            if historical_utility_alpha is not None:
+                scores[next_id].update(
+                    {
+                        "base_gain": marginal_gains[next_id],
+                        "normalized_base_gain": normalized_gains[next_id],
+                        "historical_utility_estimate": estimates.get(next_id, 0.0),
+                        "historical_reference_count": historical_reference_count,
+                        "historical_utility_alpha": historical_utility_alpha,
+                        "adjusted_score": adjusted_scores[next_id],
+                        "gain_normalization_epsilon": gain_normalization_epsilon,
+                        "coverage_bootstrap": False,
+                    }
+                )
             best_distances = [
                 min(best_distance, distance_matrix[next_id][query_index])
                 for query_index, best_distance in enumerate(best_distances)
@@ -683,6 +753,8 @@ class OracleExactRetrievalScheduler:
         historical_utility_estimates: Mapping[str, float] | None = None,
         historical_reference_count: int = 0,
         historical_utility_lambda: float = 0.0,
+        historical_utility_alpha: float | None = None,
+        gain_normalization_epsilon: float = 1e-8,
     ) -> ScheduleSelection:
         if capacity < 1:
             raise ValueError("Construction capacity must be at least 1")
@@ -692,6 +764,14 @@ class OracleExactRetrievalScheduler:
             raise ValueError("Retrieval score threshold must be non-negative")
         if historical_utility_lambda < 0:
             raise ValueError("Historical utility lambda must be non-negative")
+        if historical_utility_alpha is not None and historical_utility_alpha < 0:
+            raise ValueError("Historical utility alpha must be non-negative")
+        if historical_utility_lambda and historical_utility_alpha is not None:
+            raise ValueError(
+                "Historical utility lambda and alpha modes cannot be combined"
+            )
+        if gain_normalization_epsilon <= 0:
+            raise ValueError("Gain normalization epsilon must be positive")
         if historical_reference_count < 0:
             raise ValueError("Historical reference count cannot be negative")
         pending = set(pending_ids)
@@ -767,7 +847,6 @@ class OracleExactRetrievalScheduler:
                 )
             )
             gains: dict[str, float] = {}
-            adjusted_scores: dict[str, float] = {}
             candidate_top: dict[str, list[tuple[float, ...]]] = {}
             for memory_id in pending - set(selected):
                 updated = [
@@ -784,11 +863,30 @@ class OracleExactRetrievalScheduler:
                     )
                 )
                 gains[memory_id] = max(0.0, total_after - total_before)
-                historical_utility = estimates.get(memory_id, 0.0)
-                adjusted_scores[memory_id] = gains[memory_id] * (
-                    1.0 + historical_utility_lambda * historical_utility
-                )
                 candidate_top[memory_id] = updated
+            if historical_utility_alpha is not None:
+                max_gain = max(gains.values(), default=0.0)
+                denominator = max_gain + gain_normalization_epsilon
+                normalized_gains = {
+                    memory_id: gain / denominator
+                    for memory_id, gain in gains.items()
+                }
+                adjusted_scores = {
+                    memory_id: normalized_gains[memory_id]
+                    + historical_utility_alpha * estimates.get(memory_id, 0.0)
+                    for memory_id in gains
+                }
+            else:
+                normalized_gains = dict(gains)
+                adjusted_scores = {
+                    memory_id: gain
+                    * (
+                        1.0
+                        + historical_utility_lambda
+                        * estimates.get(memory_id, 0.0)
+                    )
+                    for memory_id, gain in gains.items()
+                }
             next_id = min(
                 gains,
                 key=lambda memory_id: (-adjusted_scores[memory_id], memory_id),
@@ -804,7 +902,9 @@ class OracleExactRetrievalScheduler:
             scores[next_id] = {
                 "value": adjusted_scores[next_id],
                 "score_type": (
-                    "historical_utility_corrected_exact_retrieval"
+                    "normalized_exact_retrieval_historical_utility"
+                    if historical_utility_alpha is not None
+                    else "historical_utility_corrected_exact_retrieval"
                     if historical_utility_lambda
                     else self.SCORE_TYPE
                 ),
@@ -820,6 +920,15 @@ class OracleExactRetrievalScheduler:
                 "retrieval_threshold": score_threshold,
                 "future_query_count": len(queries),
             }
+            if historical_utility_alpha is not None:
+                scores[next_id].update(
+                    {
+                        "base_gain": gains[next_id],
+                        "normalized_base_gain": normalized_gains[next_id],
+                        "historical_utility_alpha": historical_utility_alpha,
+                        "gain_normalization_epsilon": gain_normalization_epsilon,
+                    }
+                )
 
         return ScheduleSelection(
             memory_ids=tuple(selected),

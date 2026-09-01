@@ -60,11 +60,17 @@ from ProcedureMem.runtime_config import (
     load_memory_config,
 )
 from ProcedureMem.online_construction import (
+    COVERAGE_POLICIES,
     EXACT_RETRIEVAL_POLICIES,
+    GAIN_NORMALIZATION_EPSILON,
+    HISTORICAL_UTILITY_ALPHA,
     HISTORICAL_UTILITY_EPSILON,
     HISTORICAL_UTILITY_LAMBDA,
     HISTORICAL_UTILITY_MIN_COUNT,
+    HISTORICAL_UTILITY_POLICIES,
+    HISTORICAL_UTILITY_V2_POLICIES,
     ONLINE_POLICIES,
+    ORACLE_RETRIEVAL_THRESHOLD,
     OnlineConstructionController,
     load_warm_start_documents,
     oracle_future_query_window,
@@ -135,6 +141,11 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--scheduler-seed", type=int, default=42)
     parser.add_argument("--oracle-lookahead-horizon", type=_oracle_horizon_argument)
     parser.add_argument(
+        "--oracle-retrieval-threshold",
+        type=float,
+        default=ORACLE_RETRIEVAL_THRESHOLD,
+    )
+    parser.add_argument(
         "--historical-utility-min-count",
         type=int,
         default=HISTORICAL_UTILITY_MIN_COUNT,
@@ -148,6 +159,16 @@ def build_parser() -> argparse.ArgumentParser:
         "--historical-utility-epsilon",
         type=float,
         default=HISTORICAL_UTILITY_EPSILON,
+    )
+    parser.add_argument(
+        "--historical-utility-alpha",
+        type=float,
+        default=HISTORICAL_UTILITY_ALPHA,
+    )
+    parser.add_argument(
+        "--gain-normalization-epsilon",
+        type=float,
+        default=GAIN_NORMALIZATION_EPSILON,
     )
     parser.add_argument("--warm-start-count", type=int)
     parser.add_argument("--warm-start-seed", type=int)
@@ -184,6 +205,12 @@ def _validate_args(parser: argparse.ArgumentParser, args: argparse.Namespace) ->
         parser.error("--historical-utility-lambda must be non-negative")
     if args.historical_utility_epsilon <= 0:
         parser.error("--historical-utility-epsilon must be positive")
+    if args.historical_utility_alpha < 0:
+        parser.error("--historical-utility-alpha must be non-negative")
+    if args.gain_normalization_epsilon <= 0:
+        parser.error("--gain-normalization-epsilon must be positive")
+    if args.oracle_retrieval_threshold < 0:
+        parser.error("--oracle-retrieval-threshold must be non-negative")
     if args.condition == "edge_raw" and args.edge_capacity is None:
         parser.error("--edge-capacity is required for --condition edge_raw")
     if args.condition != "edge_raw" and args.edge_capacity is not None:
@@ -231,6 +258,7 @@ def _validate_args(parser: argparse.ArgumentParser, args: argparse.Namespace) ->
         if args.schedule_policy in {
             "fifo",
             "fifo_shortest_first",
+            "oracle_coverage_historical_utility_v2",
             *EXACT_RETRIEVAL_POLICIES,
         }:
             parser.error(
@@ -249,10 +277,7 @@ def _validate_args(parser: argparse.ArgumentParser, args: argparse.Namespace) ->
     elif args.condition == "online_construction":
         if args.schedule_policy not in ONLINE_POLICIES:
             parser.error(
-                "--schedule-policy must be fifo, fifo_shortest_first, random, "
-                "greedy_novelty, oracle_coverage, oracle_exact_retrieval, or "
-                "oracle_exact_retrieval_historical_utility "
-                "for online_construction"
+                "--schedule-policy must be an online construction policy"
             )
         if args.schedule_policy in EXACT_RETRIEVAL_POLICIES:
             if args.oracle_lookahead_horizon is None:
@@ -783,10 +808,12 @@ def main(argv: Sequence[str] | None = None) -> int:
             capacity=args.construction_capacity,
             scheduler_seed=args.scheduler_seed,
             retrieval_top_k=args.top_k,
-            retrieval_score_threshold=0.5,
+            retrieval_score_threshold=args.oracle_retrieval_threshold,
             historical_utility_min_count=args.historical_utility_min_count,
             historical_utility_lambda=args.historical_utility_lambda,
             historical_utility_epsilon=args.historical_utility_epsilon,
+            historical_utility_alpha=args.historical_utility_alpha,
+            gain_normalization_epsilon=args.gain_normalization_epsilon,
         )
 
     frozen_task_queries: tuple[str, ...] | None = None
@@ -794,7 +821,7 @@ def main(argv: Sequence[str] | None = None) -> int:
     if (
         args.condition == "online_construction"
         and args.schedule_policy
-        in {"oracle_coverage", *EXACT_RETRIEVAL_POLICIES}
+        in {*COVERAGE_POLICIES, *EXACT_RETRIEVAL_POLICIES}
     ):
         frozen_task_queries = _freeze_task_queries(
             [task["task_id"] for task in manifest["tasks"]],
@@ -939,17 +966,26 @@ def main(argv: Sequence[str] | None = None) -> int:
         "construction_capacity": args.construction_capacity,
         "oracle_objective": (
             (
-                "long_horizon_exact_retrieval_historical_utility"
+                "long_horizon_normalized_exact_retrieval_historical_utility"
+                if args.schedule_policy
+                == "oracle_exact_retrieval_historical_utility_v2"
+                else "long_horizon_exact_retrieval_historical_utility"
                 if args.schedule_policy
                 == "oracle_exact_retrieval_historical_utility"
                 else "long_horizon_exact_retrieval"
             )
             if args.condition == "online_construction"
             and args.schedule_policy in EXACT_RETRIEVAL_POLICIES
+            else "next_interval_normalized_coverage_historical_utility"
+            if args.condition == "online_construction"
+            and args.schedule_policy == "oracle_coverage_historical_utility_v2"
             else None
         ),
         "oracle_objective_version": (
-            "v1"
+            "v2"
+            if args.condition == "online_construction"
+            and args.schedule_policy in HISTORICAL_UTILITY_V2_POLICIES
+            else "v1"
             if args.condition == "online_construction"
             and args.schedule_policy in EXACT_RETRIEVAL_POLICIES
             else None
@@ -975,8 +1011,7 @@ def main(argv: Sequence[str] | None = None) -> int:
         "historical_utility_min_count": (
             online_controller.historical_utility_min_count
             if args.condition == "online_construction"
-            and args.schedule_policy
-            == "oracle_exact_retrieval_historical_utility"
+            and args.schedule_policy in HISTORICAL_UTILITY_POLICIES
             else None
         ),
         "historical_utility_lambda": (
@@ -989,8 +1024,19 @@ def main(argv: Sequence[str] | None = None) -> int:
         "historical_utility_epsilon": (
             online_controller.historical_utility_epsilon
             if args.condition == "online_construction"
-            and args.schedule_policy
-            == "oracle_exact_retrieval_historical_utility"
+            and args.schedule_policy in HISTORICAL_UTILITY_POLICIES
+            else None
+        ),
+        "historical_utility_alpha": (
+            online_controller.historical_utility_alpha
+            if args.condition == "online_construction"
+            and args.schedule_policy in HISTORICAL_UTILITY_V2_POLICIES
+            else None
+        ),
+        "gain_normalization_epsilon": (
+            online_controller.gain_normalization_epsilon
+            if args.condition == "online_construction"
+            and args.schedule_policy in HISTORICAL_UTILITY_V2_POLICIES
             else None
         ),
         "scheduler_seed": (
@@ -1074,6 +1120,13 @@ def main(argv: Sequence[str] | None = None) -> int:
             else "greedy_faiss_l2_marginal_coverage"
             if args.condition == "cloud_scheduled"
             and args.schedule_policy == "oracle_coverage"
+            else "normalized_coverage_plus_historical_utility"
+            if args.condition == "online_construction"
+            and args.schedule_policy == "oracle_coverage_historical_utility_v2"
+            else "normalized_exact_retrieval_plus_historical_utility"
+            if args.condition == "online_construction"
+            and args.schedule_policy
+            == "oracle_exact_retrieval_historical_utility_v2"
             else "faiss_squared_l2_topk_threshold_marginal_gain"
             if args.condition == "online_construction"
             and args.schedule_policy in EXACT_RETRIEVAL_POLICIES
@@ -1085,7 +1138,8 @@ def main(argv: Sequence[str] | None = None) -> int:
             and args.schedule_policy in {"oracle_high", "oracle_sum"}
             else True
             if args.condition == "online_construction"
-            and args.schedule_policy in EXACT_RETRIEVAL_POLICIES
+            and args.schedule_policy
+            in {*COVERAGE_POLICIES, *EXACT_RETRIEVAL_POLICIES}
             else None
         ),
         "scheduler_score_type": (
@@ -1365,7 +1419,7 @@ def main(argv: Sequence[str] | None = None) -> int:
                 future_queries = None
                 effective_lookahead_horizon = None
                 future_interval_count = None
-                if args.schedule_policy == "oracle_coverage":
+                if args.schedule_policy in COVERAGE_POLICIES:
                     next_interval_end = min(
                         batch_end + args.interval_size,
                         len(selected_gamefiles),
@@ -1606,6 +1660,21 @@ def main(argv: Sequence[str] | None = None) -> int:
             "oracle_retrieval_top_k": parameters["oracle_retrieval_top_k"],
             "oracle_retrieval_threshold": parameters[
                 "oracle_retrieval_threshold"
+            ],
+            "historical_utility_min_count": parameters[
+                "historical_utility_min_count"
+            ],
+            "historical_utility_lambda": parameters[
+                "historical_utility_lambda"
+            ],
+            "historical_utility_epsilon": parameters[
+                "historical_utility_epsilon"
+            ],
+            "historical_utility_alpha": parameters[
+                "historical_utility_alpha"
+            ],
+            "gain_normalization_epsilon": parameters[
+                "gain_normalization_epsilon"
             ],
             "construction_method": "direct",
             "arrival_policy": "success_only",

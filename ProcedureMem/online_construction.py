@@ -28,17 +28,36 @@ ONLINE_POLICIES = (
     "random",
     "greedy_novelty",
     "oracle_coverage",
+    "oracle_coverage_historical_utility_v2",
     "oracle_exact_retrieval",
     "oracle_exact_retrieval_historical_utility",
+    "oracle_exact_retrieval_historical_utility_v2",
 )
 
+COVERAGE_POLICIES = {
+    "oracle_coverage",
+    "oracle_coverage_historical_utility_v2",
+}
 EXACT_RETRIEVAL_POLICIES = {
     "oracle_exact_retrieval",
     "oracle_exact_retrieval_historical_utility",
+    "oracle_exact_retrieval_historical_utility_v2",
+}
+HISTORICAL_UTILITY_POLICIES = {
+    "oracle_exact_retrieval_historical_utility",
+    "oracle_coverage_historical_utility_v2",
+    "oracle_exact_retrieval_historical_utility_v2",
+}
+HISTORICAL_UTILITY_V2_POLICIES = {
+    "oracle_coverage_historical_utility_v2",
+    "oracle_exact_retrieval_historical_utility_v2",
 }
 HISTORICAL_UTILITY_MIN_COUNT = 5
 HISTORICAL_UTILITY_LAMBDA = 1.0
 HISTORICAL_UTILITY_EPSILON = 1e-8
+HISTORICAL_UTILITY_ALPHA = 1.0
+GAIN_NORMALIZATION_EPSILON = 1e-8
+ORACLE_RETRIEVAL_THRESHOLD = 0.5
 
 
 def parse_oracle_lookahead_horizon(value: str) -> int | str:
@@ -363,6 +382,8 @@ class OnlineConstructionController:
         historical_utility_min_count: int = HISTORICAL_UTILITY_MIN_COUNT,
         historical_utility_lambda: float = HISTORICAL_UTILITY_LAMBDA,
         historical_utility_epsilon: float = HISTORICAL_UTILITY_EPSILON,
+        historical_utility_alpha: float = HISTORICAL_UTILITY_ALPHA,
+        gain_normalization_epsilon: float = GAIN_NORMALIZATION_EPSILON,
     ) -> None:
         if policy not in ONLINE_POLICIES:
             raise ValueError(f"Unsupported online scheduling policy: {policy}")
@@ -374,6 +395,10 @@ class OnlineConstructionController:
             raise ValueError("Historical utility lambda must be non-negative")
         if historical_utility_epsilon <= 0:
             raise ValueError("Historical utility epsilon must be positive")
+        if historical_utility_alpha < 0:
+            raise ValueError("Historical utility alpha must be non-negative")
+        if gain_normalization_epsilon <= 0:
+            raise ValueError("Gain normalization epsilon must be positive")
         self.memory = memory
         self.policy = policy
         self.capacity = capacity
@@ -386,6 +411,8 @@ class OnlineConstructionController:
         self.historical_utility_min_count = int(historical_utility_min_count)
         self.historical_utility_lambda = float(historical_utility_lambda)
         self.historical_utility_epsilon = float(historical_utility_epsilon)
+        self.historical_utility_alpha = float(historical_utility_alpha)
+        self.gain_normalization_epsilon = float(gain_normalization_epsilon)
         self.queue = OnlineConstructionQueue()
         self.staged_documents: list[Any] = []
         self.queue_events: list[dict[str, Any]] = []
@@ -402,7 +429,7 @@ class OnlineConstructionController:
             self.scheduler = OnlineRandomScheduler(seed=scheduler_seed)
         elif policy == "greedy_novelty":
             self.scheduler = GreedyNoveltyScheduler()
-        elif policy == "oracle_coverage":
+        elif policy in COVERAGE_POLICIES:
             self.scheduler = OracleCoverageScheduler()
         else:
             self.scheduler = OracleExactRetrievalScheduler()
@@ -547,7 +574,7 @@ class OnlineConstructionController:
             )
         if self.policy not in {
             "greedy_novelty",
-            "oracle_coverage",
+            *COVERAGE_POLICIES,
             *EXACT_RETRIEVAL_POLICIES,
         }:
             return self.scheduler.select(pending_ids, self.capacity)
@@ -562,7 +589,7 @@ class OnlineConstructionController:
             )
         queries = {**available_queries, **pending_queries}
         embedder = getattr(self.memory, "cached_embedder", self.memory.embedding)
-        if self.policy == "oracle_coverage":
+        if self.policy in COVERAGE_POLICIES:
             if next_interval_queries is None:
                 raise ValueError(
                     "Oracle coverage requires next-interval task queries"
@@ -587,12 +614,32 @@ class OnlineConstructionController:
                     if item_id in requested
                 }
 
+            historical_estimates = None
+            historical_reference_count = 0
+            historical_alpha = None
+            if self.policy == "oracle_coverage_historical_utility_v2":
+                reference_queries, reference_utilities = (
+                    self._historical_references()
+                )
+                historical_estimates = estimate_historical_utilities(
+                    pending_queries,
+                    reference_queries,
+                    reference_utilities,
+                    embedder,
+                    epsilon=self.historical_utility_epsilon,
+                )
+                historical_reference_count = len(reference_queries)
+                historical_alpha = self.historical_utility_alpha
             return self.scheduler.select(
                 pending_ids,
                 self.capacity,
                 available_ids=available_queries,
                 next_interval_queries=next_interval_queries,
                 distance_scorer=distance_scorer,
+                historical_utility_estimates=historical_estimates,
+                historical_reference_count=historical_reference_count,
+                historical_utility_alpha=historical_alpha,
+                gain_normalization_epsilon=self.gain_normalization_epsilon,
             )
         if self.policy in EXACT_RETRIEVAL_POLICIES:
             if future_queries is None:
@@ -621,7 +668,8 @@ class OnlineConstructionController:
             historical_estimates = None
             historical_reference_count = 0
             historical_lambda = 0.0
-            if self.policy == "oracle_exact_retrieval_historical_utility":
+            historical_alpha = None
+            if self.policy in HISTORICAL_UTILITY_POLICIES:
                 reference_queries, reference_utilities = (
                     self._historical_references()
                 )
@@ -633,7 +681,10 @@ class OnlineConstructionController:
                     epsilon=self.historical_utility_epsilon,
                 )
                 historical_reference_count = len(reference_queries)
+            if self.policy == "oracle_exact_retrieval_historical_utility":
                 historical_lambda = self.historical_utility_lambda
+            elif self.policy == "oracle_exact_retrieval_historical_utility_v2":
+                historical_alpha = self.historical_utility_alpha
             return self.scheduler.select(
                 pending_ids,
                 self.capacity,
@@ -645,6 +696,8 @@ class OnlineConstructionController:
                 historical_utility_estimates=historical_estimates,
                 historical_reference_count=historical_reference_count,
                 historical_utility_lambda=historical_lambda,
+                historical_utility_alpha=historical_alpha,
+                gain_normalization_epsilon=self.gain_normalization_epsilon,
             )
         return self.scheduler.select(
             pending_ids,
@@ -762,6 +815,37 @@ class OnlineConstructionController:
                         else 0,
                     }
                 )
+            elif self.policy in HISTORICAL_UTILITY_V2_POLICIES:
+                event.update(
+                    {
+                        "base_gain": oracle_score.get("base_gain")
+                        if oracle_score
+                        else None,
+                        "normalized_base_gain": oracle_score.get(
+                            "normalized_base_gain"
+                        )
+                        if oracle_score
+                        else None,
+                        "historical_utility_estimate": oracle_score.get(
+                            "historical_utility_estimate"
+                        )
+                        if oracle_score
+                        else None,
+                        "historical_reference_count": oracle_score.get(
+                            "historical_reference_count"
+                        )
+                        if oracle_score
+                        else 0,
+                        "historical_utility_alpha": oracle_score.get(
+                            "historical_utility_alpha"
+                        )
+                        if oracle_score
+                        else self.historical_utility_alpha,
+                        "adjusted_score": oracle_score.get("adjusted_score")
+                        if oracle_score
+                        else None,
+                    }
+                )
             self.construction_events.append(event)
             construction_results.append(event)
 
@@ -774,7 +858,7 @@ class OnlineConstructionController:
             "oracle_scores": selection.oracle_scores,
             "oracle_next_interval_query_count": (
                 len([query for query in next_interval_queries if query.strip()])
-                if self.policy == "oracle_coverage" and next_interval_queries
+                if self.policy in COVERAGE_POLICIES and next_interval_queries
                 else None
             ),
             "oracle_requested_lookahead_horizon": (
