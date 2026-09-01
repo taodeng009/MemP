@@ -680,6 +680,9 @@ class OracleExactRetrievalScheduler:
         ],
         top_k: int,
         score_threshold: float,
+        historical_utility_estimates: Mapping[str, float] | None = None,
+        historical_reference_count: int = 0,
+        historical_utility_lambda: float = 0.0,
     ) -> ScheduleSelection:
         if capacity < 1:
             raise ValueError("Construction capacity must be at least 1")
@@ -687,6 +690,10 @@ class OracleExactRetrievalScheduler:
             raise ValueError("Retrieval top-k must be at least 1")
         if score_threshold < 0:
             raise ValueError("Retrieval score threshold must be non-negative")
+        if historical_utility_lambda < 0:
+            raise ValueError("Historical utility lambda must be non-negative")
+        if historical_reference_count < 0:
+            raise ValueError("Historical reference count cannot be negative")
         pending = set(pending_ids)
         if not pending:
             return ScheduleSelection(memory_ids=(), oracle_scores={})
@@ -697,6 +704,21 @@ class OracleExactRetrievalScheduler:
                 "Available and pending memory IDs overlap: "
                 + ", ".join(sorted(overlap)[:5])
             )
+        estimates = {
+            memory_id: float(value)
+            for memory_id, value in (historical_utility_estimates or {}).items()
+        }
+        unknown_estimates = set(estimates) - pending
+        if unknown_estimates:
+            raise ValueError(
+                "Historical utility estimates contain unknown candidates: "
+                + ", ".join(sorted(unknown_estimates)[:5])
+            )
+        for memory_id, value in estimates.items():
+            if not 0.0 <= value <= 1.0:
+                raise ValueError(
+                    f"Historical utility estimate for {memory_id} must be in [0, 1]"
+                )
 
         queries = [query for query in future_queries if query.strip()]
         if not queries:
@@ -745,6 +767,7 @@ class OracleExactRetrievalScheduler:
                 )
             )
             gains: dict[str, float] = {}
+            adjusted_scores: dict[str, float] = {}
             candidate_top: dict[str, list[tuple[float, ...]]] = {}
             for memory_id in pending - set(selected):
                 updated = [
@@ -761,10 +784,14 @@ class OracleExactRetrievalScheduler:
                     )
                 )
                 gains[memory_id] = max(0.0, total_after - total_before)
+                historical_utility = estimates.get(memory_id, 0.0)
+                adjusted_scores[memory_id] = gains[memory_id] * (
+                    1.0 + historical_utility_lambda * historical_utility
+                )
                 candidate_top[memory_id] = updated
             next_id = min(
                 gains,
-                key=lambda memory_id: (-gains[memory_id], memory_id),
+                key=lambda memory_id: (-adjusted_scores[memory_id], memory_id),
             )
             current_top = candidate_top[next_id]
             total_after = float(
@@ -775,10 +802,18 @@ class OracleExactRetrievalScheduler:
             )
             selected.append(next_id)
             scores[next_id] = {
-                "value": gains[next_id],
-                "score_type": self.SCORE_TYPE,
+                "value": adjusted_scores[next_id],
+                "score_type": (
+                    "historical_utility_corrected_exact_retrieval"
+                    if historical_utility_lambda
+                    else self.SCORE_TYPE
+                ),
                 "higher_is_better": True,
                 "selection_rank": len(selected),
+                "adjusted_score": adjusted_scores[next_id],
+                "base_retrieval_value": gains[next_id],
+                "historical_utility_estimate": estimates.get(next_id, 0.0),
+                "historical_reference_count": historical_reference_count,
                 "total_utility_before": total_before,
                 "total_utility_after": total_after,
                 "retrieval_top_k": top_k,

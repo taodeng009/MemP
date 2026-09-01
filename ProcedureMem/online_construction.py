@@ -29,7 +29,16 @@ ONLINE_POLICIES = (
     "greedy_novelty",
     "oracle_coverage",
     "oracle_exact_retrieval",
+    "oracle_exact_retrieval_historical_utility",
 )
+
+EXACT_RETRIEVAL_POLICIES = {
+    "oracle_exact_retrieval",
+    "oracle_exact_retrieval_historical_utility",
+}
+HISTORICAL_UTILITY_MIN_COUNT = 5
+HISTORICAL_UTILITY_LAMBDA = 1.0
+HISTORICAL_UTILITY_EPSILON = 1e-8
 
 
 def parse_oracle_lookahead_horizon(value: str) -> int | str:
@@ -259,6 +268,53 @@ def _query_distance_matrix(
     }
 
 
+def estimate_historical_utilities(
+    pending_queries: Mapping[str, str],
+    reference_queries: Mapping[str, str],
+    reference_utilities: Mapping[str, float],
+    embedding: Any,
+    *,
+    epsilon: float = HISTORICAL_UTILITY_EPSILON,
+) -> dict[str, float]:
+    """Transfer memory utility to pending candidates by task-query similarity."""
+    if epsilon <= 0:
+        raise ValueError("Historical utility epsilon must be positive")
+    if set(reference_queries) != set(reference_utilities):
+        raise ValueError("Historical reference queries and utilities must align")
+    if not pending_queries:
+        return {}
+    if not reference_queries:
+        return {pending_id: 0.0 for pending_id in pending_queries}
+    for reference_id, utility in reference_utilities.items():
+        if not 0.0 <= float(utility) <= 1.0:
+            raise ValueError(
+                f"Historical utility for {reference_id} must be in [0, 1]"
+            )
+
+    pending_ids = list(pending_queries)
+    reference_ids = list(reference_queries)
+    texts = [pending_queries[item_id].strip() for item_id in pending_ids]
+    texts.extend(reference_queries[item_id].strip() for item_id in reference_ids)
+    vectors = np.asarray(embedding.embed_documents(texts), dtype=np.float32)
+    pending_vectors = vectors[: len(pending_ids)]
+    reference_vectors = vectors[len(pending_ids) :]
+    squared_distances = np.sum(
+        (pending_vectors[:, np.newaxis, :] - reference_vectors[np.newaxis, :, :])
+        ** 2,
+        axis=2,
+    )
+    utilities = np.asarray(
+        [float(reference_utilities[item_id]) for item_id in reference_ids],
+        dtype=np.float64,
+    )
+    weights = 1.0 / (squared_distances.astype(np.float64) + epsilon)
+    estimates = (weights @ utilities) / np.sum(weights, axis=1)
+    return {
+        pending_id: float(estimates[index])
+        for index, pending_id in enumerate(pending_ids)
+    }
+
+
 def load_warm_start_documents(
     path: str | Path, *, count: int, seed: int
 ) -> tuple[list[Any], tuple[str, ...]]:
@@ -323,7 +379,9 @@ class OnlineConstructionController:
         self.queue_events: list[dict[str, Any]] = []
         self.construction_events: list[dict[str, Any]] = []
         self.trajectory_events: list[dict[str, Any]] = []
+        self.historical_memory_stats: dict[str, dict[str, int]] = {}
         self._arrival_order = 0
+        self._register_available_memories()
         if policy == "fifo":
             self.scheduler = FIFOScheduler()
         elif policy == "fifo_shortest_first":
@@ -341,6 +399,33 @@ class OnlineConstructionController:
     def available_memory_count(self) -> int:
         return len(self.memory.documents)
 
+    def _register_available_memories(self) -> None:
+        for memory_id in self._available_queries():
+            self.historical_memory_stats.setdefault(
+                memory_id,
+                {"retrieval_count": 0, "success_count": 0},
+            )
+
+    def record_retrieval_outcomes(
+        self, results: Sequence[Mapping[str, Any]]
+    ) -> None:
+        """Update run-local memory outcomes from completed tasks exactly once."""
+        self._register_available_memories()
+        for result in results:
+            retrieved_ids = {
+                str(memory_id)
+                for memory_id in result.get("retrieved_memory_ids", [])
+                if memory_id is not None
+            }
+            for memory_id in retrieved_ids:
+                counters = self.historical_memory_stats.setdefault(
+                    memory_id,
+                    {"retrieval_count": 0, "success_count": 0},
+                )
+                counters["retrieval_count"] += 1
+                if bool(result.get("reward")):
+                    counters["success_count"] += 1
+
     def activate_staged(self, *, interval_id: int) -> list[str]:
         if not self.staged_documents:
             return []
@@ -353,6 +438,7 @@ class OnlineConstructionController:
         self.memory.save_documents()
         self.memory.rebuild_index()
         self.staged_documents.clear()
+        self._register_available_memories()
         return [document.metadata["memory_id"] for document in documents]
 
     def admit_results(
@@ -407,6 +493,26 @@ class OnlineConstructionController:
             )
         return top_k, threshold
 
+    def _historical_references(
+        self,
+    ) -> tuple[dict[str, str], dict[str, float]]:
+        reference_queries = {
+            memory_id: query
+            for memory_id, query in self._available_queries().items()
+            if self.historical_memory_stats.get(memory_id, {}).get(
+                "retrieval_count", 0
+            )
+            >= HISTORICAL_UTILITY_MIN_COUNT
+        }
+        reference_utilities = {
+            memory_id: (
+                self.historical_memory_stats[memory_id]["success_count"]
+                / self.historical_memory_stats[memory_id]["retrieval_count"]
+            )
+            for memory_id in reference_queries
+        }
+        return reference_queries, reference_utilities
+
     def _selection(
         self,
         *,
@@ -430,7 +536,7 @@ class OnlineConstructionController:
         if self.policy not in {
             "greedy_novelty",
             "oracle_coverage",
-            "oracle_exact_retrieval",
+            *EXACT_RETRIEVAL_POLICIES,
         }:
             return self.scheduler.select(pending_ids, self.capacity)
         available_queries = self._available_queries()
@@ -476,7 +582,7 @@ class OnlineConstructionController:
                 next_interval_queries=next_interval_queries,
                 distance_scorer=distance_scorer,
             )
-        if self.policy == "oracle_exact_retrieval":
+        if self.policy in EXACT_RETRIEVAL_POLICIES:
             if future_queries is None:
                 raise ValueError(
                     "Exact-retrieval Oracle requires future task queries"
@@ -500,6 +606,21 @@ class OnlineConstructionController:
                 }
 
             top_k, threshold = self._exact_retrieval_config()
+            historical_estimates = None
+            historical_reference_count = 0
+            historical_lambda = 0.0
+            if self.policy == "oracle_exact_retrieval_historical_utility":
+                reference_queries, reference_utilities = (
+                    self._historical_references()
+                )
+                historical_estimates = estimate_historical_utilities(
+                    pending_queries,
+                    reference_queries,
+                    reference_utilities,
+                    embedder,
+                )
+                historical_reference_count = len(reference_queries)
+                historical_lambda = HISTORICAL_UTILITY_LAMBDA
             return self.scheduler.select(
                 pending_ids,
                 self.capacity,
@@ -508,6 +629,9 @@ class OnlineConstructionController:
                 distance_scorer=exact_distance_scorer,
                 top_k=top_k,
                 score_threshold=threshold,
+                historical_utility_estimates=historical_estimates,
+                historical_reference_count=historical_reference_count,
+                historical_utility_lambda=historical_lambda,
             )
         return self.scheduler.select(
             pending_ids,
@@ -602,6 +726,29 @@ class OnlineConstructionController:
                     "constructed_memory_id": None,
                     "available_from_interval": None,
                 }
+            if self.policy == "oracle_exact_retrieval_historical_utility":
+                event.update(
+                    {
+                        "adjusted_score": oracle_score.get("adjusted_score")
+                        if oracle_score
+                        else None,
+                        "base_retrieval_value": oracle_score.get(
+                            "base_retrieval_value"
+                        )
+                        if oracle_score
+                        else None,
+                        "historical_utility_estimate": oracle_score.get(
+                            "historical_utility_estimate"
+                        )
+                        if oracle_score
+                        else None,
+                        "historical_reference_count": oracle_score.get(
+                            "historical_reference_count"
+                        )
+                        if oracle_score
+                        else 0,
+                    }
+                )
             self.construction_events.append(event)
             construction_results.append(event)
 
@@ -619,32 +766,32 @@ class OnlineConstructionController:
             ),
             "oracle_requested_lookahead_horizon": (
                 requested_lookahead_horizon
-                if self.policy == "oracle_exact_retrieval"
+                if self.policy in EXACT_RETRIEVAL_POLICIES
                 else None
             ),
             "oracle_effective_lookahead_horizon": (
                 effective_lookahead_horizon
-                if self.policy == "oracle_exact_retrieval"
+                if self.policy in EXACT_RETRIEVAL_POLICIES
                 else None
             ),
             "oracle_future_interval_count": (
                 future_interval_count
-                if self.policy == "oracle_exact_retrieval"
+                if self.policy in EXACT_RETRIEVAL_POLICIES
                 else None
             ),
             "oracle_future_query_count": (
                 len([query for query in future_queries if query.strip()])
-                if self.policy == "oracle_exact_retrieval" and future_queries
+                if self.policy in EXACT_RETRIEVAL_POLICIES and future_queries
                 else None
             ),
             "oracle_retrieval_top_k": (
                 self._exact_retrieval_config()[0]
-                if self.policy == "oracle_exact_retrieval"
+                if self.policy in EXACT_RETRIEVAL_POLICIES
                 else None
             ),
             "oracle_retrieval_threshold": (
                 self._exact_retrieval_config()[1]
-                if self.policy == "oracle_exact_retrieval"
+                if self.policy in EXACT_RETRIEVAL_POLICIES
                 else None
             ),
             "queue_length_after_construction": len(self.queue),
@@ -672,26 +819,26 @@ class OnlineConstructionController:
             "final_interval_no_construction": True,
             "oracle_requested_lookahead_horizon": (
                 requested_lookahead_horizon
-                if self.policy == "oracle_exact_retrieval"
+                if self.policy in EXACT_RETRIEVAL_POLICIES
                 else None
             ),
             "oracle_effective_lookahead_horizon": (
-                0 if self.policy == "oracle_exact_retrieval" else None
+                0 if self.policy in EXACT_RETRIEVAL_POLICIES else None
             ),
             "oracle_future_interval_count": (
-                0 if self.policy == "oracle_exact_retrieval" else None
+                0 if self.policy in EXACT_RETRIEVAL_POLICIES else None
             ),
             "oracle_future_query_count": (
-                0 if self.policy == "oracle_exact_retrieval" else None
+                0 if self.policy in EXACT_RETRIEVAL_POLICIES else None
             ),
             "oracle_retrieval_top_k": (
                 self._exact_retrieval_config()[0]
-                if self.policy == "oracle_exact_retrieval"
+                if self.policy in EXACT_RETRIEVAL_POLICIES
                 else None
             ),
             "oracle_retrieval_threshold": (
                 self._exact_retrieval_config()[1]
-                if self.policy == "oracle_exact_retrieval"
+                if self.policy in EXACT_RETRIEVAL_POLICIES
                 else None
             ),
         }

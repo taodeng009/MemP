@@ -10,11 +10,13 @@ from ProcedureMem.online_construction import (
     OnlineConstructionController,
     OnlineConstructionQueue,
     OnlineTrajectoryCandidate,
+    estimate_historical_utilities,
     load_warm_start_documents,
     oracle_future_query_window,
     parse_oracle_lookahead_horizon,
     trajectory_queue_id,
 )
+from ProcedureMem.cloud_scheduling import OracleExactRetrievalScheduler
 
 
 class FakeEmbedding:
@@ -180,6 +182,68 @@ class QueueTests(unittest.TestCase):
 
 
 class ControllerTests(unittest.TestCase):
+    def test_historical_counters_deduplicate_each_task(self):
+        warm = SimpleNamespace(
+            page_content="available",
+            metadata={"memory_id": "warm_0", "query": "available"},
+        )
+        controller = OnlineConstructionController(
+            memory=FakeMemory(documents=[warm]), policy="fifo", capacity=1
+        )
+
+        controller.record_retrieval_outcomes(
+            [
+                {
+                    "retrieved_memory_ids": ["warm_0", "warm_0"],
+                    "reward": True,
+                },
+                {"retrieved_memory_ids": ["warm_0"], "reward": False},
+                {"retrieved_memory_ids": [], "reward": True},
+            ]
+        )
+
+        self.assertEqual(
+            controller.historical_memory_stats["warm_0"],
+            {"retrieval_count": 2, "success_count": 1},
+        )
+
+    def test_warm_start_enters_historical_pool_at_five_retrievals(self):
+        warm = SimpleNamespace(
+            page_content="available",
+            metadata={"memory_id": "warm_0", "query": "available"},
+        )
+        controller = OnlineConstructionController(
+            memory=FakeMemory(documents=[warm]),
+            policy="oracle_exact_retrieval_historical_utility",
+            capacity=1,
+        )
+        controller.record_retrieval_outcomes(
+            [
+                {"retrieved_memory_ids": ["warm_0"], "reward": index != 0}
+                for index in range(4)
+            ]
+        )
+        self.assertEqual(controller._historical_references(), ({}, {}))
+
+        controller.record_retrieval_outcomes(
+            [{"retrieved_memory_ids": ["warm_0"], "reward": True}]
+        )
+        queries, utilities = controller._historical_references()
+
+        self.assertEqual(queries, {"warm_0": "available"})
+        self.assertEqual(utilities, {"warm_0": 0.8})
+
+        controller.admit_results(
+            [result(0, query="near"), result(1, query="next-far")],
+            interval_id=0,
+        )
+        controller.construct(interval_id=0, future_queries=["next-far"])
+        construction = controller.construction_events[0]
+
+        self.assertEqual(construction["historical_reference_count"], 1)
+        self.assertAlmostEqual(construction["historical_utility_estimate"], 0.8)
+        self.assertGreater(construction["adjusted_score"], 0.0)
+
     def test_only_successes_arrive_and_unselected_item_persists(self):
         controller = OnlineConstructionController(
             memory=FakeMemory(), policy="fifo", capacity=1
@@ -415,6 +479,56 @@ class WarmStartTests(unittest.TestCase):
                     for document in first_documents
                 )
             )
+
+
+class HistoricalUtilityTests(unittest.TestCase):
+    def test_distance_weighted_historical_utility(self):
+        estimates = estimate_historical_utilities(
+            {"pending": "near"},
+            {"left": "available", "right": "task-a"},
+            {"left": 1.0, "right": 0.0},
+            FakeEmbedding(),
+        )
+
+        self.assertAlmostEqual(estimates["pending"], 0.5)
+
+    def test_lambda_zero_matches_exact_retrieval(self):
+        distances = {
+            "available": (0.4,),
+            "candidate_a": (0.1,),
+            "candidate_b": (0.2,),
+        }
+
+        def distance_scorer(_queries, requested_ids):
+            return {memory_id: distances[memory_id] for memory_id in requested_ids}
+
+        scheduler = OracleExactRetrievalScheduler()
+        baseline = scheduler.select(
+            ["candidate_a", "candidate_b"],
+            2,
+            available_ids=["available"],
+            future_queries=["future"],
+            distance_scorer=distance_scorer,
+            top_k=1,
+            score_threshold=0.5,
+        )
+        corrected = scheduler.select(
+            ["candidate_a", "candidate_b"],
+            2,
+            available_ids=["available"],
+            future_queries=["future"],
+            distance_scorer=distance_scorer,
+            top_k=1,
+            score_threshold=0.5,
+            historical_utility_estimates={
+                "candidate_a": 0.0,
+                "candidate_b": 1.0,
+            },
+            historical_reference_count=1,
+            historical_utility_lambda=0.0,
+        )
+
+        self.assertEqual(corrected.memory_ids, baseline.memory_ids)
 
 
 if __name__ == "__main__":
