@@ -482,6 +482,32 @@ class WarmStartTests(unittest.TestCase):
 
 
 class HistoricalUtilityTests(unittest.TestCase):
+    def test_controller_uses_configured_historical_parameters(self):
+        warm = SimpleNamespace(
+            page_content="available",
+            metadata={"memory_id": "warm_0", "query": "available"},
+        )
+        controller = OnlineConstructionController(
+            memory=FakeMemory(documents=[warm]),
+            policy="oracle_exact_retrieval_historical_utility",
+            capacity=1,
+            historical_utility_min_count=2,
+            historical_utility_lambda=0.5,
+            historical_utility_epsilon=1e-6,
+        )
+        controller.record_retrieval_outcomes(
+            [
+                {"retrieved_memory_ids": ["warm_0"], "reward": True},
+                {"retrieved_memory_ids": ["warm_0"], "reward": False},
+            ]
+        )
+
+        queries, utilities = controller._historical_references()
+        self.assertEqual(queries, {"warm_0": "available"})
+        self.assertEqual(utilities, {"warm_0": 0.5})
+        self.assertEqual(controller.historical_utility_lambda, 0.5)
+        self.assertEqual(controller.historical_utility_epsilon, 1e-6)
+
     def test_distance_weighted_historical_utility(self):
         estimates = estimate_historical_utilities(
             {"pending": "near"},

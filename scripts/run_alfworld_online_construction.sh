@@ -31,12 +31,22 @@ set -euo pipefail
 #   ORACLE_LOOKAHEAD_HORIZONS="1 3 all_remaining" \
 #   EXPERIMENT_NAME="online_exact_oracle_smoke_n30" \
 #     bash scripts/run_alfworld_online_construction.sh
-SPLIT="${SPLIT:-valid_unseen}"
+#
+# Exact-H1 vs Exact-H1 + Historical Utility:
+#   TASK_COUNT=250 BATCH_SIZE=1 INTERVAL_SIZE=20 CONSTRUCTION_CAPACITY=5 \
+#   WARM_START_COUNTS=0 \
+#   POLICIES="oracle_exact_retrieval oracle_exact_retrieval_historical_utility" \
+#   ORACLE_LOOKAHEAD_HORIZONS=1 \
+#   HISTORICAL_UTILITY_MIN_COUNT=5 HISTORICAL_UTILITY_LAMBDA=1.0 \
+#   HISTORICAL_UTILITY_EPSILON=1e-8 \
+#   EXPERIMENT_NAME="online_exact_hu_train_seed42_n250_b1_i20_c5" \
+#     bash scripts/run_alfworld_online_construction.sh
+SPLIT="${SPLIT:-train}"
 SEED="${SEED:-42}"
-TASK_COUNT="${TASK_COUNT:-134}"
-BATCH_SIZE="${BATCH_SIZE:-2}"
-INTERVAL_SIZE="${INTERVAL_SIZE:-10}"
-CONSTRUCTION_CAPACITY="${CONSTRUCTION_CAPACITY:-3}"
+TASK_COUNT="${TASK_COUNT:-250}"
+BATCH_SIZE="${BATCH_SIZE:-1}"
+INTERVAL_SIZE="${INTERVAL_SIZE:-20}"
+CONSTRUCTION_CAPACITY="${CONSTRUCTION_CAPACITY:-5}"
 WARM_START_COUNT="${WARM_START_COUNT:-0}"
 WARM_START_COUNTS="${WARM_START_COUNTS:-$WARM_START_COUNT}"
 WARM_START_ONLY="${WARM_START_ONLY:-0}"
@@ -45,8 +55,11 @@ WARM_START_MEMORY_FILE="${WARM_START_MEMORY_FILE:-ProcedureMem/memory/alfworld/d
 MAX_STEPS="${MAX_STEPS:-30}"
 TEMPERATURE="${TEMPERATURE:-0}"
 TOP_K="${TOP_K:-3}"
-POLICIES="${POLICIES:-fifo greedy_novelty}"
+POLICIES="${POLICIES:-oracle_exact_retrieval_historical_utility}"
 ORACLE_LOOKAHEAD_HORIZONS="${ORACLE_LOOKAHEAD_HORIZONS:-1}"
+HISTORICAL_UTILITY_MIN_COUNT="${HISTORICAL_UTILITY_MIN_COUNT:-5}"
+HISTORICAL_UTILITY_LAMBDA="${HISTORICAL_UTILITY_LAMBDA:-1.0}"
+HISTORICAL_UTILITY_EPSILON="${HISTORICAL_UTILITY_EPSILON:-1e-8}"
 RUN_RANDOM="${RUN_RANDOM:-0}"
 SCHEDULER_SEED="${SCHEDULER_SEED:-42}"
 
@@ -106,7 +119,7 @@ for warm_count in "${WARM_COUNTS[@]}"; do
   if [[ "$warm_count" != "0" ]]; then
     warm_suffix="_warm${warm_count}_ws${WARM_START_SEED}"
   fi
-  default_experiment_name="online_construction_${SPLIT}_seed${SEED}_n${TASK_COUNT}_b${INTERVAL_SIZE}_c${effective_capacity}${warm_suffix}${mode_suffix}"
+  default_experiment_name="online_construction_${SPLIT}_seed${SEED}_n${TASK_COUNT}_b${BATCH_SIZE}_i${INTERVAL_SIZE}_c${effective_capacity}${warm_suffix}${mode_suffix}"
   if [[ -n "${EXPERIMENT_NAME:-}" ]]; then
     if [[ "${#WARM_COUNTS[@]}" -gt 1 ]]; then
       experiment_name="${EXPERIMENT_NAME}_warm${warm_count}"
@@ -140,19 +153,29 @@ for warm_count in "${WARM_COUNTS[@]}"; do
 
   for policy in $run_policies; do
     policy_horizons=("")
-    if [[ "$policy" == "oracle_exact_retrieval" ]]; then
+    if [[ "$policy" == "oracle_exact_retrieval" \
+      || "$policy" == "oracle_exact_retrieval_historical_utility" ]]; then
       policy_horizons=("${ORACLE_HORIZONS[@]}")
     fi
     for horizon in "${policy_horizons[@]}"; do
       condition_name="online_construction_${policy}"
       oracle_args=()
-      if [[ "$policy" == "oracle_exact_retrieval" ]]; then
+      historical_utility_args=()
+      if [[ "$policy" == "oracle_exact_retrieval" \
+        || "$policy" == "oracle_exact_retrieval_historical_utility" ]]; then
         horizon_suffix="$horizon"
         if [[ "$horizon" == "all_remaining" ]]; then
           horizon_suffix="all"
         fi
-        condition_name="online_construction_oracle_exact_retrieval_h${horizon_suffix}"
+        condition_name="online_construction_${policy}_h${horizon_suffix}"
         oracle_args+=(--oracle-lookahead-horizon "$horizon")
+      fi
+      if [[ "$policy" == "oracle_exact_retrieval_historical_utility" ]]; then
+        historical_utility_args+=(
+          --historical-utility-min-count "$HISTORICAL_UTILITY_MIN_COUNT"
+          --historical-utility-lambda "$HISTORICAL_UTILITY_LAMBDA"
+          --historical-utility-epsilon "$HISTORICAL_UTILITY_EPSILON"
+        )
       fi
       if [[ "$WARM_START_ONLY" == "1" ]]; then
         condition_name="${condition_prefix}_w${warm_count}"
@@ -161,6 +184,7 @@ for warm_count in "${WARM_COUNTS[@]}"; do
         --schedule-policy "$policy" \
         --condition-name "$condition_name" \
         "${oracle_args[@]}" \
+        "${historical_utility_args[@]}" \
         "${common_args[@]}"
     done
   done

@@ -360,11 +360,20 @@ class OnlineConstructionController:
         scheduler_seed: int = 42,
         retrieval_top_k: int | None = None,
         retrieval_score_threshold: float = 0.5,
+        historical_utility_min_count: int = HISTORICAL_UTILITY_MIN_COUNT,
+        historical_utility_lambda: float = HISTORICAL_UTILITY_LAMBDA,
+        historical_utility_epsilon: float = HISTORICAL_UTILITY_EPSILON,
     ) -> None:
         if policy not in ONLINE_POLICIES:
             raise ValueError(f"Unsupported online scheduling policy: {policy}")
         if capacity < 0:
             raise ValueError("Construction capacity cannot be negative")
+        if historical_utility_min_count < 1:
+            raise ValueError("Historical utility min count must be at least 1")
+        if historical_utility_lambda < 0:
+            raise ValueError("Historical utility lambda must be non-negative")
+        if historical_utility_epsilon <= 0:
+            raise ValueError("Historical utility epsilon must be positive")
         self.memory = memory
         self.policy = policy
         self.capacity = capacity
@@ -374,6 +383,9 @@ class OnlineConstructionController:
             else int(getattr(memory, "retrieve_num", 0))
         )
         self.retrieval_score_threshold = float(retrieval_score_threshold)
+        self.historical_utility_min_count = int(historical_utility_min_count)
+        self.historical_utility_lambda = float(historical_utility_lambda)
+        self.historical_utility_epsilon = float(historical_utility_epsilon)
         self.queue = OnlineConstructionQueue()
         self.staged_documents: list[Any] = []
         self.queue_events: list[dict[str, Any]] = []
@@ -502,7 +514,7 @@ class OnlineConstructionController:
             if self.historical_memory_stats.get(memory_id, {}).get(
                 "retrieval_count", 0
             )
-            >= HISTORICAL_UTILITY_MIN_COUNT
+            >= self.historical_utility_min_count
         }
         reference_utilities = {
             memory_id: (
@@ -618,9 +630,10 @@ class OnlineConstructionController:
                     reference_queries,
                     reference_utilities,
                     embedder,
+                    epsilon=self.historical_utility_epsilon,
                 )
                 historical_reference_count = len(reference_queries)
-                historical_lambda = HISTORICAL_UTILITY_LAMBDA
+                historical_lambda = self.historical_utility_lambda
             return self.scheduler.select(
                 pending_ids,
                 self.capacity,

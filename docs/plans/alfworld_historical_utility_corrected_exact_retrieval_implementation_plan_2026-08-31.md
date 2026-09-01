@@ -244,15 +244,15 @@ lambda = 1.0
 --schedule-policy oracle_exact_retrieval_historical_utility
 ```
 
-第一版不把 historical hyperparameters 暴露为 CLI 参数，内部固定：
+三个 historical hyperparameters 暴露为 CLI，并由运行脚本传入；默认值为：
 
 ```text
-R_min = 5
-lambda = 1.0
-epsilon = 1e-8
+--historical-utility-min-count 5
+--historical-utility-lambda 1.0
+--historical-utility-epsilon 1e-8
 ```
 
-只保留已有 Exact Retrieval 所需的基本合法性检查，例如 lookahead horizon、retrieval Top-K 和 threshold。内部 scoring 接口仍允许测试时传入 `lambda=0`，用于验证能够退化为原始 Exact Retrieval。
+只做基本合法性检查：`min-count >= 1`、`lambda >= 0`、`epsilon > 0`，以及已有 Exact Retrieval 的 lookahead horizon、retrieval Top-K 和 threshold 检查。`lambda=0` 用于验证能够退化为原始 Exact Retrieval，不增加复杂参数互斥规则。
 
 ## 9. 日志与结果记录
 

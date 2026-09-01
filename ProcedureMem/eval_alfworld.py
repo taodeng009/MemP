@@ -134,6 +134,21 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--construction-capacity", type=int)
     parser.add_argument("--scheduler-seed", type=int, default=42)
     parser.add_argument("--oracle-lookahead-horizon", type=_oracle_horizon_argument)
+    parser.add_argument(
+        "--historical-utility-min-count",
+        type=int,
+        default=HISTORICAL_UTILITY_MIN_COUNT,
+    )
+    parser.add_argument(
+        "--historical-utility-lambda",
+        type=float,
+        default=HISTORICAL_UTILITY_LAMBDA,
+    )
+    parser.add_argument(
+        "--historical-utility-epsilon",
+        type=float,
+        default=HISTORICAL_UTILITY_EPSILON,
+    )
     parser.add_argument("--warm-start-count", type=int)
     parser.add_argument("--warm-start-seed", type=int)
     parser.add_argument("--warm-start-memory-file", type=Path)
@@ -163,6 +178,12 @@ def _validate_args(parser: argparse.ArgumentParser, args: argparse.Namespace) ->
         parser.error("--condition-name must be a name, not a path")
     if args.score_threshold is not None and args.score_threshold < 0:
         parser.error("--score-threshold must be non-negative")
+    if args.historical_utility_min_count < 1:
+        parser.error("--historical-utility-min-count must be at least 1")
+    if args.historical_utility_lambda < 0:
+        parser.error("--historical-utility-lambda must be non-negative")
+    if args.historical_utility_epsilon <= 0:
+        parser.error("--historical-utility-epsilon must be positive")
     if args.condition == "edge_raw" and args.edge_capacity is None:
         parser.error("--edge-capacity is required for --condition edge_raw")
     if args.condition != "edge_raw" and args.edge_capacity is not None:
@@ -763,6 +784,9 @@ def main(argv: Sequence[str] | None = None) -> int:
             scheduler_seed=args.scheduler_seed,
             retrieval_top_k=args.top_k,
             retrieval_score_threshold=0.5,
+            historical_utility_min_count=args.historical_utility_min_count,
+            historical_utility_lambda=args.historical_utility_lambda,
+            historical_utility_epsilon=args.historical_utility_epsilon,
         )
 
     frozen_task_queries: tuple[str, ...] | None = None
@@ -949,21 +973,21 @@ def main(argv: Sequence[str] | None = None) -> int:
             else None
         ),
         "historical_utility_min_count": (
-            HISTORICAL_UTILITY_MIN_COUNT
+            online_controller.historical_utility_min_count
             if args.condition == "online_construction"
             and args.schedule_policy
             == "oracle_exact_retrieval_historical_utility"
             else None
         ),
         "historical_utility_lambda": (
-            HISTORICAL_UTILITY_LAMBDA
+            online_controller.historical_utility_lambda
             if args.condition == "online_construction"
             and args.schedule_policy
             == "oracle_exact_retrieval_historical_utility"
             else None
         ),
         "historical_utility_epsilon": (
-            HISTORICAL_UTILITY_EPSILON
+            online_controller.historical_utility_epsilon
             if args.condition == "online_construction"
             and args.schedule_policy
             == "oracle_exact_retrieval_historical_utility"
