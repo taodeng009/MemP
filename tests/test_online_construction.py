@@ -521,6 +521,87 @@ class HistoricalUtilityTests(unittest.TestCase):
 
         self.assertAlmostEqual(estimates["pending"], 0.5)
 
+    def test_historical_top_k_uses_only_nearest_references(self):
+        class LinearEmbedding:
+            vectors = {
+                "pending": [0.0],
+                "reference-1": [1.0],
+                "reference-2": [2.0],
+                "reference-3": [3.0],
+                "reference-4": [4.0],
+                "reference-5": [5.0],
+                "reference-6": [6.0],
+            }
+
+            def embed_documents(self, texts):
+                return [self.vectors[text] for text in texts]
+
+        reference_queries = {
+            f"memory_{index}": f"reference-{index}" for index in range(1, 7)
+        }
+        reference_utilities = {
+            **{f"memory_{index}": 1.0 for index in range(1, 6)},
+            "memory_6": 0.0,
+        }
+        all_reference = estimate_historical_utilities(
+            {"pending": "pending"},
+            reference_queries,
+            reference_utilities,
+            LinearEmbedding(),
+        )
+        local_top_five = estimate_historical_utilities(
+            {"pending": "pending"},
+            reference_queries,
+            reference_utilities,
+            LinearEmbedding(),
+            top_k=5,
+        )
+
+        self.assertLess(all_reference["pending"], 1.0)
+        self.assertAlmostEqual(local_top_five["pending"], 1.0)
+
+    def test_historical_top_k_clamps_to_reference_pool(self):
+        pending = {"pending": "near"}
+        references = {"left": "available", "right": "task-a"}
+        utilities = {"left": 1.0, "right": 0.0}
+
+        all_reference = estimate_historical_utilities(
+            pending, references, utilities, FakeEmbedding()
+        )
+        oversized_top_k = estimate_historical_utilities(
+            pending, references, utilities, FakeEmbedding(), top_k=5
+        )
+
+        self.assertEqual(oversized_top_k, all_reference)
+
+    def test_historical_top_k_empty_reference_pool_returns_zero(self):
+        estimates = estimate_historical_utilities(
+            {"pending": "near"}, {}, {}, FakeEmbedding(), top_k=5
+        )
+
+        self.assertEqual(estimates, {"pending": 0.0})
+
+    def test_historical_top_k_breaks_distance_ties_by_reference_id(self):
+        class TieEmbedding:
+            vectors = {
+                "pending": [0.0],
+                "left": [-1.0],
+                "right": [1.0],
+            }
+
+            def embed_documents(self, texts):
+                return [self.vectors[text] for text in texts]
+
+        estimates = estimate_historical_utilities(
+            {"pending": "pending"},
+            {"reference_b": "right", "reference_a": "left"},
+            {"reference_b": 1.0, "reference_a": 0.0},
+            TieEmbedding(),
+            top_k=1,
+        )
+
+        self.assertEqual(estimates, {"pending": 0.0})
+
     def test_lambda_zero_matches_exact_retrieval(self):
         distances = {
             "available": (0.4,),
@@ -752,7 +833,10 @@ class HistoricalUtilityTests(unittest.TestCase):
 
         self.assertEqual(controller.historical_utility_alpha, 0.25)
         self.assertEqual(controller.gain_normalization_epsilon, 1e-7)
+        self.assertIsNone(controller.historical_utility_top_k)
         self.assertEqual(event["historical_reference_count"], 1)
+        self.assertNotIn("historical_utility_top_k", event)
+        self.assertNotIn("historical_effective_reference_count", event)
         self.assertIn("base_gain", event)
         self.assertIn("normalized_base_gain", event)
         self.assertAlmostEqual(
@@ -786,13 +870,72 @@ class HistoricalUtilityTests(unittest.TestCase):
         )
         event = controller.construction_events[0]
 
+        self.assertIsNone(controller.historical_utility_top_k)
         self.assertEqual(event["historical_reference_count"], 1)
+        self.assertNotIn("historical_utility_top_k", event)
+        self.assertNotIn("historical_effective_reference_count", event)
         self.assertAlmostEqual(event["historical_utility_estimate"], 1.0)
         self.assertAlmostEqual(
             event["adjusted_score"],
             event["normalized_base_gain"] + 0.5,
         )
         self.assertEqual(queue_event["oracle_next_interval_query_count"], 1)
+
+    def test_top_k_policy_records_local_reference_configuration(self):
+        warm = SimpleNamespace(
+            page_content="available",
+            metadata={"memory_id": "warm_0", "query": "available"},
+        )
+        controller = OnlineConstructionController(
+            memory=FakeMemory(documents=[warm]),
+            policy="oracle_exact_retrieval_historical_utility_v2_topk",
+            capacity=1,
+            historical_utility_min_count=1,
+            historical_utility_alpha=0.5,
+            historical_utility_top_k=5,
+        )
+        controller.record_retrieval_outcomes(
+            [{"retrieved_memory_ids": ["warm_0"], "reward": True}]
+        )
+        controller.admit_results(
+            [result(0, query="near"), result(1, query="far")], interval_id=0
+        )
+
+        controller.construct(interval_id=0, future_queries=["next-far"])
+        event = controller.construction_events[0]
+
+        self.assertEqual(controller.historical_utility_top_k, 5)
+        self.assertEqual(event["historical_reference_count"], 1)
+        self.assertEqual(event["historical_utility_top_k"], 5)
+        self.assertEqual(event["historical_effective_reference_count"], 1)
+
+    def test_coverage_top_k_policy_records_local_reference_configuration(self):
+        warm = SimpleNamespace(
+            page_content="available",
+            metadata={"memory_id": "warm_0", "query": "available"},
+        )
+        controller = OnlineConstructionController(
+            memory=FakeMemory(documents=[warm]),
+            policy="oracle_coverage_historical_utility_v2_topk",
+            capacity=1,
+            historical_utility_min_count=1,
+            historical_utility_top_k=5,
+        )
+        controller.record_retrieval_outcomes(
+            [{"retrieved_memory_ids": ["warm_0"], "reward": True}]
+        )
+        controller.admit_results(
+            [result(0, query="near"), result(1, query="far")], interval_id=0
+        )
+
+        controller.construct(
+            interval_id=0,
+            next_interval_queries=["next-far"],
+        )
+        event = controller.construction_events[0]
+
+        self.assertEqual(event["historical_utility_top_k"], 5)
+        self.assertEqual(event["historical_effective_reference_count"], 1)
 
 
 if __name__ == "__main__":

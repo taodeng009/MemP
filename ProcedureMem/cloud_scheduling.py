@@ -551,6 +551,7 @@ class OracleCoverageScheduler:
         historical_utility_estimates: Mapping[str, float] | None = None,
         historical_reference_count: int = 0,
         historical_utility_alpha: float | None = None,
+        historical_utility_top_k: int | None = None,
         gain_normalization_epsilon: float = 1e-8,
     ) -> ScheduleSelection:
         if capacity < 1:
@@ -561,6 +562,8 @@ class OracleCoverageScheduler:
             raise ValueError("Gain normalization epsilon must be positive")
         if historical_reference_count < 0:
             raise ValueError("Historical reference count cannot be negative")
+        if historical_utility_top_k is not None and historical_utility_top_k < 1:
+            raise ValueError("Historical utility top-k must be at least 1")
         pending = set(pending_ids)
         if not pending:
             return ScheduleSelection(memory_ids=(), oracle_scores={})
@@ -650,6 +653,13 @@ class OracleCoverageScheduler:
                         "coverage_bootstrap": True,
                     }
                 )
+                if historical_utility_top_k is not None:
+                    scores[first_id].update(
+                        {
+                            "historical_utility_top_k": historical_utility_top_k,
+                            "historical_effective_reference_count": 0,
+                        }
+                    )
             best_distances = list(distance_matrix[first_id])
 
         target_count = min(capacity, len(pending))
@@ -711,6 +721,16 @@ class OracleCoverageScheduler:
                         "coverage_bootstrap": False,
                     }
                 )
+                if historical_utility_top_k is not None:
+                    scores[next_id].update(
+                        {
+                            "historical_utility_top_k": historical_utility_top_k,
+                            "historical_effective_reference_count": min(
+                                historical_reference_count,
+                                historical_utility_top_k,
+                            ),
+                        }
+                    )
             best_distances = [
                 min(best_distance, distance_matrix[next_id][query_index])
                 for query_index, best_distance in enumerate(best_distances)
@@ -754,6 +774,7 @@ class OracleExactRetrievalScheduler:
         historical_reference_count: int = 0,
         historical_utility_lambda: float = 0.0,
         historical_utility_alpha: float | None = None,
+        historical_utility_top_k: int | None = None,
         gain_normalization_epsilon: float = 1e-8,
     ) -> ScheduleSelection:
         if capacity < 1:
@@ -774,6 +795,8 @@ class OracleExactRetrievalScheduler:
             raise ValueError("Gain normalization epsilon must be positive")
         if historical_reference_count < 0:
             raise ValueError("Historical reference count cannot be negative")
+        if historical_utility_top_k is not None and historical_utility_top_k < 1:
+            raise ValueError("Historical utility top-k must be at least 1")
         pending = set(pending_ids)
         if not pending:
             return ScheduleSelection(memory_ids=(), oracle_scores={})
@@ -929,6 +952,16 @@ class OracleExactRetrievalScheduler:
                         "gain_normalization_epsilon": gain_normalization_epsilon,
                     }
                 )
+                if historical_utility_top_k is not None:
+                    scores[next_id].update(
+                        {
+                            "historical_utility_top_k": historical_utility_top_k,
+                            "historical_effective_reference_count": min(
+                                historical_reference_count,
+                                historical_utility_top_k,
+                            ),
+                        }
+                    )
 
         return ScheduleSelection(
             memory_ids=tuple(selected),

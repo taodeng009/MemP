@@ -51,9 +51,19 @@ set -euo pipefail
 #   HISTORICAL_UTILITY_EPSILON=1e-8 GAIN_NORMALIZATION_EPSILON=1e-8 \
 #   EXPERIMENT_NAME="online_normalized_hu_v2_train_seed42_n250_b1_i20_c5" \
 #     bash scripts/run_alfworld_online_construction.sh
-SPLIT="${SPLIT:-valid}"
+#
+# Normalized Gain + local Historical Top-K V2 patch:
+#   TASK_COUNT=134 BATCH_SIZE=1 INTERVAL_SIZE=20 CONSTRUCTION_CAPACITY=5 \
+#   WARM_START_COUNTS=0 \
+#   POLICIES="oracle_coverage_historical_utility_v2_topk oracle_exact_retrieval_historical_utility_v2_topk" \
+#   ORACLE_LOOKAHEAD_HORIZONS=1 ORACLE_RETRIEVAL_THRESHOLD=0.5 \
+#   HISTORICAL_UTILITY_MIN_COUNT=5 HISTORICAL_UTILITY_ALPHA=0.5 \
+#   HISTORICAL_UTILITY_TOP_K=5 \
+#   HISTORICAL_UTILITY_EPSILON=1e-8 GAIN_NORMALIZATION_EPSILON=1e-8 \
+#     bash scripts/run_alfworld_online_construction.sh
+SPLIT="${SPLIT:-valid_unseen}"
 SEED="${SEED:-42}"
-TASK_COUNT="${TASK_COUNT:-250}"
+TASK_COUNT="${TASK_COUNT:-134}"
 BATCH_SIZE="${BATCH_SIZE:-1}"
 INTERVAL_SIZE="${INTERVAL_SIZE:-20}"
 CONSTRUCTION_CAPACITY="${CONSTRUCTION_CAPACITY:-5}"
@@ -65,13 +75,14 @@ WARM_START_MEMORY_FILE="${WARM_START_MEMORY_FILE:-ProcedureMem/memory/alfworld/d
 MAX_STEPS="${MAX_STEPS:-30}"
 TEMPERATURE="${TEMPERATURE:-0}"
 TOP_K="${TOP_K:-3}"
-POLICIES="${POLICIES:-oracle_exact_retrieval_historical_utility}"
+POLICIES="${POLICIES:-oracle_coverage_historical_utility_v2 oracle_exact_retrieval_historical_utility_v2}"
 ORACLE_LOOKAHEAD_HORIZONS="${ORACLE_LOOKAHEAD_HORIZONS:-1}"
 ORACLE_RETRIEVAL_THRESHOLD="${ORACLE_RETRIEVAL_THRESHOLD:-0.5}"
 HISTORICAL_UTILITY_MIN_COUNT="${HISTORICAL_UTILITY_MIN_COUNT:-5}"
 HISTORICAL_UTILITY_LAMBDA="${HISTORICAL_UTILITY_LAMBDA:-1.0}"
 HISTORICAL_UTILITY_EPSILON="${HISTORICAL_UTILITY_EPSILON:-1e-8}"
-HISTORICAL_UTILITY_ALPHA="${HISTORICAL_UTILITY_ALPHA:-1.0}"
+HISTORICAL_UTILITY_ALPHA="${HISTORICAL_UTILITY_ALPHA:-0.5}"
+HISTORICAL_UTILITY_TOP_K="${HISTORICAL_UTILITY_TOP_K:-5}"
 GAIN_NORMALIZATION_EPSILON="${GAIN_NORMALIZATION_EPSILON:-1e-8}"
 RUN_RANDOM="${RUN_RANDOM:-0}"
 SCHEDULER_SEED="${SCHEDULER_SEED:-42}"
@@ -102,6 +113,16 @@ for horizon in "${ORACLE_HORIZONS[@]}"; do
   if [[ "$horizon" != "all_remaining" && ! "$horizon" =~ ^[1-9][0-9]*$ ]]; then
     echo "Invalid Oracle lookahead horizon: $horizon" >&2
     exit 2
+  fi
+done
+
+for configured_policy in $POLICIES; do
+  if [[ "$configured_policy" == "oracle_coverage_historical_utility_v2_topk" \
+    || "$configured_policy" == "oracle_exact_retrieval_historical_utility_v2_topk" ]]; then
+    if [[ ! "$HISTORICAL_UTILITY_TOP_K" =~ ^[1-9][0-9]*$ ]]; then
+      echo "HISTORICAL_UTILITY_TOP_K must be a positive integer" >&2
+      exit 2
+    fi
   fi
 done
 
@@ -168,7 +189,8 @@ for warm_count in "${WARM_COUNTS[@]}"; do
     policy_horizons=("")
     if [[ "$policy" == "oracle_exact_retrieval" \
       || "$policy" == "oracle_exact_retrieval_historical_utility" \
-      || "$policy" == "oracle_exact_retrieval_historical_utility_v2" ]]; then
+      || "$policy" == "oracle_exact_retrieval_historical_utility_v2" \
+      || "$policy" == "oracle_exact_retrieval_historical_utility_v2_topk" ]]; then
       policy_horizons=("${ORACLE_HORIZONS[@]}")
     fi
     for horizon in "${policy_horizons[@]}"; do
@@ -177,7 +199,8 @@ for warm_count in "${WARM_COUNTS[@]}"; do
       historical_utility_args=()
       if [[ "$policy" == "oracle_exact_retrieval" \
         || "$policy" == "oracle_exact_retrieval_historical_utility" \
-        || "$policy" == "oracle_exact_retrieval_historical_utility_v2" ]]; then
+        || "$policy" == "oracle_exact_retrieval_historical_utility_v2" \
+        || "$policy" == "oracle_exact_retrieval_historical_utility_v2_topk" ]]; then
         horizon_suffix="$horizon"
         if [[ "$horizon" == "all_remaining" ]]; then
           horizon_suffix="all"
@@ -195,13 +218,23 @@ for warm_count in "${WARM_COUNTS[@]}"; do
           --historical-utility-epsilon "$HISTORICAL_UTILITY_EPSILON"
         )
       elif [[ "$policy" == "oracle_coverage_historical_utility_v2" \
-        || "$policy" == "oracle_exact_retrieval_historical_utility_v2" ]]; then
+        || "$policy" == "oracle_coverage_historical_utility_v2_topk" \
+        || "$policy" == "oracle_exact_retrieval_historical_utility_v2" \
+        || "$policy" == "oracle_exact_retrieval_historical_utility_v2_topk" ]]; then
+        condition_name="${condition_name}_alpha${HISTORICAL_UTILITY_ALPHA}"
         historical_utility_args+=(
           --historical-utility-min-count "$HISTORICAL_UTILITY_MIN_COUNT"
           --historical-utility-epsilon "$HISTORICAL_UTILITY_EPSILON"
           --historical-utility-alpha "$HISTORICAL_UTILITY_ALPHA"
           --gain-normalization-epsilon "$GAIN_NORMALIZATION_EPSILON"
         )
+        if [[ "$policy" == "oracle_coverage_historical_utility_v2_topk" \
+          || "$policy" == "oracle_exact_retrieval_historical_utility_v2_topk" ]]; then
+          condition_name="${condition_name}_htop${HISTORICAL_UTILITY_TOP_K}"
+          historical_utility_args+=(
+            --historical-utility-top-k "$HISTORICAL_UTILITY_TOP_K"
+          )
+        fi
       fi
       if [[ "$WARM_START_ONLY" == "1" ]]; then
         condition_name="${condition_prefix}_w${warm_count}"

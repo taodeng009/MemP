@@ -29,33 +29,46 @@ ONLINE_POLICIES = (
     "greedy_novelty",
     "oracle_coverage",
     "oracle_coverage_historical_utility_v2",
+    "oracle_coverage_historical_utility_v2_topk",
     "oracle_exact_retrieval",
     "oracle_exact_retrieval_historical_utility",
     "oracle_exact_retrieval_historical_utility_v2",
+    "oracle_exact_retrieval_historical_utility_v2_topk",
 )
 
 COVERAGE_POLICIES = {
     "oracle_coverage",
     "oracle_coverage_historical_utility_v2",
+    "oracle_coverage_historical_utility_v2_topk",
 }
 EXACT_RETRIEVAL_POLICIES = {
     "oracle_exact_retrieval",
     "oracle_exact_retrieval_historical_utility",
     "oracle_exact_retrieval_historical_utility_v2",
+    "oracle_exact_retrieval_historical_utility_v2_topk",
 }
 HISTORICAL_UTILITY_POLICIES = {
     "oracle_exact_retrieval_historical_utility",
     "oracle_coverage_historical_utility_v2",
+    "oracle_coverage_historical_utility_v2_topk",
     "oracle_exact_retrieval_historical_utility_v2",
+    "oracle_exact_retrieval_historical_utility_v2_topk",
 }
 HISTORICAL_UTILITY_V2_POLICIES = {
     "oracle_coverage_historical_utility_v2",
+    "oracle_coverage_historical_utility_v2_topk",
     "oracle_exact_retrieval_historical_utility_v2",
+    "oracle_exact_retrieval_historical_utility_v2_topk",
+}
+HISTORICAL_UTILITY_TOPK_POLICIES = {
+    "oracle_coverage_historical_utility_v2_topk",
+    "oracle_exact_retrieval_historical_utility_v2_topk",
 }
 HISTORICAL_UTILITY_MIN_COUNT = 5
 HISTORICAL_UTILITY_LAMBDA = 1.0
 HISTORICAL_UTILITY_EPSILON = 1e-8
 HISTORICAL_UTILITY_ALPHA = 1.0
+HISTORICAL_UTILITY_TOP_K = 5
 GAIN_NORMALIZATION_EPSILON = 1e-8
 ORACLE_RETRIEVAL_THRESHOLD = 0.5
 
@@ -294,10 +307,13 @@ def estimate_historical_utilities(
     embedding: Any,
     *,
     epsilon: float = HISTORICAL_UTILITY_EPSILON,
+    top_k: int | None = None,
 ) -> dict[str, float]:
     """Transfer memory utility to pending candidates by task-query similarity."""
     if epsilon <= 0:
         raise ValueError("Historical utility epsilon must be positive")
+    if top_k is not None and top_k < 1:
+        raise ValueError("Historical utility top-k must be at least 1")
     if set(reference_queries) != set(reference_utilities):
         raise ValueError("Historical reference queries and utilities must align")
     if not pending_queries:
@@ -326,8 +342,25 @@ def estimate_historical_utilities(
         [float(reference_utilities[item_id]) for item_id in reference_ids],
         dtype=np.float64,
     )
-    weights = 1.0 / (squared_distances.astype(np.float64) + epsilon)
-    estimates = (weights @ utilities) / np.sum(weights, axis=1)
+    if top_k is None or top_k >= len(reference_ids):
+        weights = 1.0 / (squared_distances.astype(np.float64) + epsilon)
+        estimates = (weights @ utilities) / np.sum(weights, axis=1)
+    else:
+        estimates = np.empty(len(pending_ids), dtype=np.float64)
+        for pending_index, distance_row in enumerate(squared_distances):
+            nearest_indices = sorted(
+                range(len(reference_ids)),
+                key=lambda reference_index: (
+                    float(distance_row[reference_index]),
+                    reference_ids[reference_index],
+                ),
+            )[:top_k]
+            local_distances = distance_row[nearest_indices].astype(np.float64)
+            local_weights = 1.0 / (local_distances + epsilon)
+            local_utilities = utilities[nearest_indices]
+            estimates[pending_index] = float(
+                np.dot(local_weights, local_utilities) / np.sum(local_weights)
+            )
     return {
         pending_id: float(estimates[index])
         for index, pending_id in enumerate(pending_ids)
@@ -383,6 +416,7 @@ class OnlineConstructionController:
         historical_utility_lambda: float = HISTORICAL_UTILITY_LAMBDA,
         historical_utility_epsilon: float = HISTORICAL_UTILITY_EPSILON,
         historical_utility_alpha: float = HISTORICAL_UTILITY_ALPHA,
+        historical_utility_top_k: int = HISTORICAL_UTILITY_TOP_K,
         gain_normalization_epsilon: float = GAIN_NORMALIZATION_EPSILON,
     ) -> None:
         if policy not in ONLINE_POLICIES:
@@ -397,6 +431,11 @@ class OnlineConstructionController:
             raise ValueError("Historical utility epsilon must be positive")
         if historical_utility_alpha < 0:
             raise ValueError("Historical utility alpha must be non-negative")
+        if (
+            policy in HISTORICAL_UTILITY_TOPK_POLICIES
+            and historical_utility_top_k < 1
+        ):
+            raise ValueError("Historical utility top-k must be at least 1")
         if gain_normalization_epsilon <= 0:
             raise ValueError("Gain normalization epsilon must be positive")
         self.memory = memory
@@ -412,6 +451,11 @@ class OnlineConstructionController:
         self.historical_utility_lambda = float(historical_utility_lambda)
         self.historical_utility_epsilon = float(historical_utility_epsilon)
         self.historical_utility_alpha = float(historical_utility_alpha)
+        self.historical_utility_top_k = (
+            int(historical_utility_top_k)
+            if policy in HISTORICAL_UTILITY_TOPK_POLICIES
+            else None
+        )
         self.gain_normalization_epsilon = float(gain_normalization_epsilon)
         self.queue = OnlineConstructionQueue()
         self.staged_documents: list[Any] = []
@@ -617,16 +661,23 @@ class OnlineConstructionController:
             historical_estimates = None
             historical_reference_count = 0
             historical_alpha = None
-            if self.policy == "oracle_coverage_historical_utility_v2":
+            historical_top_k = None
+            if self.policy in {
+                "oracle_coverage_historical_utility_v2",
+                "oracle_coverage_historical_utility_v2_topk",
+            }:
                 reference_queries, reference_utilities = (
                     self._historical_references()
                 )
+                if self.policy in HISTORICAL_UTILITY_TOPK_POLICIES:
+                    historical_top_k = self.historical_utility_top_k
                 historical_estimates = estimate_historical_utilities(
                     pending_queries,
                     reference_queries,
                     reference_utilities,
                     embedder,
                     epsilon=self.historical_utility_epsilon,
+                    top_k=historical_top_k,
                 )
                 historical_reference_count = len(reference_queries)
                 historical_alpha = self.historical_utility_alpha
@@ -639,6 +690,7 @@ class OnlineConstructionController:
                 historical_utility_estimates=historical_estimates,
                 historical_reference_count=historical_reference_count,
                 historical_utility_alpha=historical_alpha,
+                historical_utility_top_k=historical_top_k,
                 gain_normalization_epsilon=self.gain_normalization_epsilon,
             )
         if self.policy in EXACT_RETRIEVAL_POLICIES:
@@ -669,21 +721,28 @@ class OnlineConstructionController:
             historical_reference_count = 0
             historical_lambda = 0.0
             historical_alpha = None
+            historical_top_k = None
             if self.policy in HISTORICAL_UTILITY_POLICIES:
                 reference_queries, reference_utilities = (
                     self._historical_references()
                 )
+                if self.policy in HISTORICAL_UTILITY_TOPK_POLICIES:
+                    historical_top_k = self.historical_utility_top_k
                 historical_estimates = estimate_historical_utilities(
                     pending_queries,
                     reference_queries,
                     reference_utilities,
                     embedder,
                     epsilon=self.historical_utility_epsilon,
+                    top_k=historical_top_k,
                 )
                 historical_reference_count = len(reference_queries)
             if self.policy == "oracle_exact_retrieval_historical_utility":
                 historical_lambda = self.historical_utility_lambda
-            elif self.policy == "oracle_exact_retrieval_historical_utility_v2":
+            elif self.policy in {
+                "oracle_exact_retrieval_historical_utility_v2",
+                "oracle_exact_retrieval_historical_utility_v2_topk",
+            }:
                 historical_alpha = self.historical_utility_alpha
             return self.scheduler.select(
                 pending_ids,
@@ -697,6 +756,7 @@ class OnlineConstructionController:
                 historical_reference_count=historical_reference_count,
                 historical_utility_lambda=historical_lambda,
                 historical_utility_alpha=historical_alpha,
+                historical_utility_top_k=historical_top_k,
                 gain_normalization_epsilon=self.gain_normalization_epsilon,
             )
         return self.scheduler.select(
@@ -846,6 +906,21 @@ class OnlineConstructionController:
                         else None,
                     }
                 )
+                if self.policy in HISTORICAL_UTILITY_TOPK_POLICIES:
+                    event.update(
+                        {
+                            "historical_utility_top_k": oracle_score.get(
+                                "historical_utility_top_k"
+                            )
+                            if oracle_score
+                            else self.historical_utility_top_k,
+                            "historical_effective_reference_count": oracle_score.get(
+                                "historical_effective_reference_count"
+                            )
+                            if oracle_score
+                            else 0,
+                        }
+                    )
             self.construction_events.append(event)
             construction_results.append(event)
 

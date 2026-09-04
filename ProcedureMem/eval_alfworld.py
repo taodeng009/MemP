@@ -68,6 +68,8 @@ from ProcedureMem.online_construction import (
     HISTORICAL_UTILITY_LAMBDA,
     HISTORICAL_UTILITY_MIN_COUNT,
     HISTORICAL_UTILITY_POLICIES,
+    HISTORICAL_UTILITY_TOP_K,
+    HISTORICAL_UTILITY_TOPK_POLICIES,
     HISTORICAL_UTILITY_V2_POLICIES,
     ONLINE_POLICIES,
     ORACLE_RETRIEVAL_THRESHOLD,
@@ -166,6 +168,11 @@ def build_parser() -> argparse.ArgumentParser:
         default=HISTORICAL_UTILITY_ALPHA,
     )
     parser.add_argument(
+        "--historical-utility-top-k",
+        type=int,
+        default=HISTORICAL_UTILITY_TOP_K,
+    )
+    parser.add_argument(
         "--gain-normalization-epsilon",
         type=float,
         default=GAIN_NORMALIZATION_EPSILON,
@@ -207,6 +214,11 @@ def _validate_args(parser: argparse.ArgumentParser, args: argparse.Namespace) ->
         parser.error("--historical-utility-epsilon must be positive")
     if args.historical_utility_alpha < 0:
         parser.error("--historical-utility-alpha must be non-negative")
+    if (
+        args.schedule_policy in HISTORICAL_UTILITY_TOPK_POLICIES
+        and args.historical_utility_top_k < 1
+    ):
+        parser.error("--historical-utility-top-k must be at least 1")
     if args.gain_normalization_epsilon <= 0:
         parser.error("--gain-normalization-epsilon must be positive")
     if args.oracle_retrieval_threshold < 0:
@@ -259,6 +271,7 @@ def _validate_args(parser: argparse.ArgumentParser, args: argparse.Namespace) ->
             "fifo",
             "fifo_shortest_first",
             "oracle_coverage_historical_utility_v2",
+            "oracle_coverage_historical_utility_v2_topk",
             *EXACT_RETRIEVAL_POLICIES,
         }:
             parser.error(
@@ -813,6 +826,7 @@ def main(argv: Sequence[str] | None = None) -> int:
             historical_utility_lambda=args.historical_utility_lambda,
             historical_utility_epsilon=args.historical_utility_epsilon,
             historical_utility_alpha=args.historical_utility_alpha,
+            historical_utility_top_k=args.historical_utility_top_k,
             gain_normalization_epsilon=args.gain_normalization_epsilon,
         )
 
@@ -968,7 +982,10 @@ def main(argv: Sequence[str] | None = None) -> int:
             (
                 "long_horizon_normalized_exact_retrieval_historical_utility"
                 if args.schedule_policy
-                == "oracle_exact_retrieval_historical_utility_v2"
+                in {
+                    "oracle_exact_retrieval_historical_utility_v2",
+                    "oracle_exact_retrieval_historical_utility_v2_topk",
+                }
                 else "long_horizon_exact_retrieval_historical_utility"
                 if args.schedule_policy
                 == "oracle_exact_retrieval_historical_utility"
@@ -978,7 +995,11 @@ def main(argv: Sequence[str] | None = None) -> int:
             and args.schedule_policy in EXACT_RETRIEVAL_POLICIES
             else "next_interval_normalized_coverage_historical_utility"
             if args.condition == "online_construction"
-            and args.schedule_policy == "oracle_coverage_historical_utility_v2"
+            and args.schedule_policy
+            in {
+                "oracle_coverage_historical_utility_v2",
+                "oracle_coverage_historical_utility_v2_topk",
+            }
             else None
         ),
         "oracle_objective_version": (
@@ -1031,6 +1052,12 @@ def main(argv: Sequence[str] | None = None) -> int:
             online_controller.historical_utility_alpha
             if args.condition == "online_construction"
             and args.schedule_policy in HISTORICAL_UTILITY_V2_POLICIES
+            else None
+        ),
+        "historical_utility_top_k": (
+            online_controller.historical_utility_top_k
+            if args.condition == "online_construction"
+            and args.schedule_policy in HISTORICAL_UTILITY_TOPK_POLICIES
             else None
         ),
         "gain_normalization_epsilon": (
@@ -1122,11 +1149,18 @@ def main(argv: Sequence[str] | None = None) -> int:
             and args.schedule_policy == "oracle_coverage"
             else "normalized_coverage_plus_historical_utility"
             if args.condition == "online_construction"
-            and args.schedule_policy == "oracle_coverage_historical_utility_v2"
+            and args.schedule_policy
+            in {
+                "oracle_coverage_historical_utility_v2",
+                "oracle_coverage_historical_utility_v2_topk",
+            }
             else "normalized_exact_retrieval_plus_historical_utility"
             if args.condition == "online_construction"
             and args.schedule_policy
-            == "oracle_exact_retrieval_historical_utility_v2"
+            in {
+                "oracle_exact_retrieval_historical_utility_v2",
+                "oracle_exact_retrieval_historical_utility_v2_topk",
+            }
             else "faiss_squared_l2_topk_threshold_marginal_gain"
             if args.condition == "online_construction"
             and args.schedule_policy in EXACT_RETRIEVAL_POLICIES
@@ -1672,6 +1706,9 @@ def main(argv: Sequence[str] | None = None) -> int:
             ],
             "historical_utility_alpha": parameters[
                 "historical_utility_alpha"
+            ],
+            "historical_utility_top_k": parameters[
+                "historical_utility_top_k"
             ],
             "gain_normalization_epsilon": parameters[
                 "gain_normalization_epsilon"
