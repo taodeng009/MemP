@@ -969,6 +969,92 @@ class OracleExactRetrievalScheduler:
         )
 
 
+class OracleHitQualityScheduler(OracleExactRetrievalScheduler):
+    """Greedy normalized new-hit gain plus RU or unbounded BD gain."""
+
+    def select(
+        self,
+        pending_ids: Iterable[str],
+        capacity: int,
+        *,
+        available_ids: Iterable[str],
+        future_queries: Sequence[str],
+        distance_scorer: Callable[[Sequence[str], Iterable[str]], Mapping[str, Sequence[float]]],
+        top_k: int,
+        score_threshold: float,
+        alpha: float = 0.5,
+        metric: str = "ru",
+    ) -> ScheduleSelection:
+        if not np.isfinite(alpha) or not 0 <= alpha <= 1:
+            raise ValueError("Hit quality alpha must be finite and in [0, 1]")
+        if metric not in {"bd", "ru"}:
+            raise ValueError("Hit quality metric must be bd or ru")
+        if top_k < 1 or not np.isfinite(score_threshold) or score_threshold < 0:
+            raise ValueError("Invalid retrieval top-k or threshold")
+        if capacity < 0:
+            raise ValueError("Capacity cannot be negative")
+        pending, available = set(pending_ids), set(available_ids)
+        if pending & available:
+            raise ValueError("Pending and available IDs must be disjoint")
+        if not pending or capacity == 0:
+            return ScheduleSelection(memory_ids=(), oracle_scores={})
+        queries = [q for q in future_queries if q.strip()]
+        if not queries:
+            raise ValueError("Hit quality requires future queries")
+        matrix = {k: tuple(float(d) for d in v) for k, v in
+                  distance_scorer(queries, pending | available).items()}
+        if set(matrix) != pending | available or any(
+            len(v) != len(queries) or any(not np.isfinite(d) or d < 0 for d in v)
+            for v in matrix.values()
+        ):
+            raise ValueError("Invalid hit quality distance matrix")
+        current = [self._top_distances((matrix[m][i] for m in available), top_k=top_k)
+                   for i in range(len(queries))]
+        selected, scores = [], {}
+        target = min(capacity, len(pending))
+        while len(selected) < target:
+            remaining = pending - set(selected)
+            best = [min(ds, default=float("inf")) for ds in current]
+            before = sum(self._utility(ds, threshold=score_threshold) for ds in current)
+            updated, hits, quality = {}, {}, {}
+            bootstrap = metric == "bd" and not available and not selected
+            for m in remaining:
+                updated[m] = [self._top_distances((*current[i], matrix[m][i]), top_k=top_k)
+                              for i in range(len(queries))]
+                hits[m] = sum(b > score_threshold and d <= score_threshold
+                              for b, d in zip(best, matrix[m]))
+                if not bootstrap:
+                    quality[m] = (sum(max(0.0, b-d) for b, d in zip(best, matrix[m]))
+                                  if metric == "bd" else max(0.0, sum(
+                                      self._utility(ds, threshold=score_threshold)
+                                      for ds in updated[m]) - before))
+            if bootstrap:
+                chosen = min(remaining, key=lambda m: (sum(matrix[m]), m))
+                detail = dict(quality_gain=None, hit_gain_max=None, quality_gain_max=None,
+                              normalized_hit_gain=None, normalized_quality_gain=None,
+                              priority=None, value=float(sum(matrix[chosen])),
+                              higher_is_better=False,
+                              bootstrap_distance_sum=float(sum(matrix[chosen])))
+            else:
+                hm, qm = max(hits.values()), max(quality.values())
+                hn = {m: hits[m]/(hm+1e-8) for m in remaining}
+                qn = {m: quality[m]/(qm+1e-8) for m in remaining}
+                priority = {m: alpha*hn[m] + (1-alpha)*qn[m] for m in remaining}
+                # Raw endpoint scores preserve the existing Oracle tie-break exactly.
+                ordering = quality if alpha == 0 else hits if alpha == 1 else priority
+                chosen = min(remaining, key=lambda m: (-ordering[m], m))
+                detail = dict(quality_gain=quality[chosen], hit_gain_max=hm,
+                              quality_gain_max=qm, normalized_hit_gain=hn[chosen],
+                              normalized_quality_gain=qn[chosen], priority=priority[chosen],
+                              value=priority[chosen], higher_is_better=True)
+            selected.append(chosen)
+            current = updated[chosen]
+            scores[chosen] = dict(detail, hit_gain=hits[chosen], selection_rank=len(selected),
+                                  coverage_bootstrap=bootstrap, hit_quality_alpha=alpha,
+                                  hit_quality_metric=metric, score_type="hit_quality_"+metric)
+        return ScheduleSelection(memory_ids=tuple(selected), oracle_scores=scores)
+
+
 def summarize_scheduling_intervals(
     results: Sequence[dict[str, Any]],
 ) -> list[dict[str, Any]]:

@@ -16,6 +16,7 @@ from ProcedureMem.cloud_scheduling import (
     GreedyNoveltyScheduler,
     OracleCoverageScheduler,
     OracleExactRetrievalScheduler,
+    OracleHitQualityScheduler,
     ScheduleSelection,
     load_candidate_memories,
     select_warm_start_ids,
@@ -23,6 +24,7 @@ from ProcedureMem.cloud_scheduling import (
 
 
 ONLINE_POLICIES = (
+    "oracle_hit_quality",
     "fifo",
     "fifo_shortest_first",
     "random",
@@ -47,6 +49,7 @@ EXACT_RETRIEVAL_POLICIES = {
     "oracle_exact_retrieval_historical_utility_v2",
     "oracle_exact_retrieval_historical_utility_v2_topk",
 }
+FUTURE_WINDOW_POLICIES = EXACT_RETRIEVAL_POLICIES | {"oracle_hit_quality"}
 HISTORICAL_UTILITY_POLICIES = {
     "oracle_exact_retrieval_historical_utility",
     "oracle_coverage_historical_utility_v2",
@@ -418,6 +421,8 @@ class OnlineConstructionController:
         historical_utility_alpha: float = HISTORICAL_UTILITY_ALPHA,
         historical_utility_top_k: int = HISTORICAL_UTILITY_TOP_K,
         gain_normalization_epsilon: float = GAIN_NORMALIZATION_EPSILON,
+        hit_quality_alpha: float = 0.5,
+        hit_quality_metric: str = "ru",
     ) -> None:
         if policy not in ONLINE_POLICIES:
             raise ValueError(f"Unsupported online scheduling policy: {policy}")
@@ -439,6 +444,12 @@ class OnlineConstructionController:
         if gain_normalization_epsilon <= 0:
             raise ValueError("Gain normalization epsilon must be positive")
         self.memory = memory
+        if not np.isfinite(hit_quality_alpha) or not 0 <= hit_quality_alpha <= 1:
+            raise ValueError("Hit quality alpha must be finite and in [0, 1]")
+        if hit_quality_metric not in {"ru", "bd"}:
+            raise ValueError("Hit quality metric must be ru or bd")
+        self.hit_quality_alpha = hit_quality_alpha
+        self.hit_quality_metric = hit_quality_metric
         self.policy = policy
         self.capacity = capacity
         self.retrieval_top_k = (
@@ -465,7 +476,9 @@ class OnlineConstructionController:
         self.historical_memory_stats: dict[str, dict[str, int]] = {}
         self._arrival_order = 0
         self._register_available_memories()
-        if policy == "fifo":
+        if policy == "oracle_hit_quality":
+            self.scheduler = OracleHitQualityScheduler()
+        elif policy == "fifo":
             self.scheduler = FIFOScheduler()
         elif policy == "fifo_shortest_first":
             self.scheduler = FIFOShortestFirstScheduler()
@@ -619,7 +632,7 @@ class OnlineConstructionController:
         if self.policy not in {
             "greedy_novelty",
             *COVERAGE_POLICIES,
-            *EXACT_RETRIEVAL_POLICIES,
+            *FUTURE_WINDOW_POLICIES,
         }:
             return self.scheduler.select(pending_ids, self.capacity)
         available_queries = self._available_queries()
@@ -693,7 +706,7 @@ class OnlineConstructionController:
                 historical_utility_top_k=historical_top_k,
                 gain_normalization_epsilon=self.gain_normalization_epsilon,
             )
-        if self.policy in EXACT_RETRIEVAL_POLICIES:
+        if self.policy in FUTURE_WINDOW_POLICIES:
             if future_queries is None:
                 raise ValueError(
                     "Exact-retrieval Oracle requires future task queries"
@@ -717,6 +730,13 @@ class OnlineConstructionController:
                 }
 
             top_k, threshold = self._exact_retrieval_config()
+            if self.policy == "oracle_hit_quality":
+                return self.scheduler.select(
+                    pending_ids, self.capacity, available_ids=available_queries,
+                    future_queries=future_queries, distance_scorer=exact_distance_scorer,
+                    top_k=top_k, score_threshold=threshold,
+                    alpha=self.hit_quality_alpha, metric=self.hit_quality_metric,
+                )
             historical_estimates = None
             historical_reference_count = 0
             historical_lambda = 0.0
@@ -938,32 +958,32 @@ class OnlineConstructionController:
             ),
             "oracle_requested_lookahead_horizon": (
                 requested_lookahead_horizon
-                if self.policy in EXACT_RETRIEVAL_POLICIES
+                if self.policy in FUTURE_WINDOW_POLICIES
                 else None
             ),
             "oracle_effective_lookahead_horizon": (
                 effective_lookahead_horizon
-                if self.policy in EXACT_RETRIEVAL_POLICIES
+                if self.policy in FUTURE_WINDOW_POLICIES
                 else None
             ),
             "oracle_future_interval_count": (
                 future_interval_count
-                if self.policy in EXACT_RETRIEVAL_POLICIES
+                if self.policy in FUTURE_WINDOW_POLICIES
                 else None
             ),
             "oracle_future_query_count": (
                 len([query for query in future_queries if query.strip()])
-                if self.policy in EXACT_RETRIEVAL_POLICIES and future_queries
+                if self.policy in FUTURE_WINDOW_POLICIES and future_queries
                 else None
             ),
             "oracle_retrieval_top_k": (
                 self._exact_retrieval_config()[0]
-                if self.policy in EXACT_RETRIEVAL_POLICIES
+                if self.policy in FUTURE_WINDOW_POLICIES
                 else None
             ),
             "oracle_retrieval_threshold": (
                 self._exact_retrieval_config()[1]
-                if self.policy in EXACT_RETRIEVAL_POLICIES
+                if self.policy in FUTURE_WINDOW_POLICIES
                 else None
             ),
             "queue_length_after_construction": len(self.queue),
@@ -991,26 +1011,26 @@ class OnlineConstructionController:
             "final_interval_no_construction": True,
             "oracle_requested_lookahead_horizon": (
                 requested_lookahead_horizon
-                if self.policy in EXACT_RETRIEVAL_POLICIES
+                if self.policy in FUTURE_WINDOW_POLICIES
                 else None
             ),
             "oracle_effective_lookahead_horizon": (
-                0 if self.policy in EXACT_RETRIEVAL_POLICIES else None
+                0 if self.policy in FUTURE_WINDOW_POLICIES else None
             ),
             "oracle_future_interval_count": (
-                0 if self.policy in EXACT_RETRIEVAL_POLICIES else None
+                0 if self.policy in FUTURE_WINDOW_POLICIES else None
             ),
             "oracle_future_query_count": (
-                0 if self.policy in EXACT_RETRIEVAL_POLICIES else None
+                0 if self.policy in FUTURE_WINDOW_POLICIES else None
             ),
             "oracle_retrieval_top_k": (
                 self._exact_retrieval_config()[0]
-                if self.policy in EXACT_RETRIEVAL_POLICIES
+                if self.policy in FUTURE_WINDOW_POLICIES
                 else None
             ),
             "oracle_retrieval_threshold": (
                 self._exact_retrieval_config()[1]
-                if self.policy in EXACT_RETRIEVAL_POLICIES
+                if self.policy in FUTURE_WINDOW_POLICIES
                 else None
             ),
         }

@@ -61,7 +61,7 @@ from ProcedureMem.runtime_config import (
 )
 from ProcedureMem.online_construction import (
     COVERAGE_POLICIES,
-    EXACT_RETRIEVAL_POLICIES,
+    FUTURE_WINDOW_POLICIES,
     GAIN_NORMALIZATION_EPSILON,
     HISTORICAL_UTILITY_ALPHA,
     HISTORICAL_UTILITY_EPSILON,
@@ -142,6 +142,8 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--construction-capacity", type=int)
     parser.add_argument("--scheduler-seed", type=int, default=42)
     parser.add_argument("--oracle-lookahead-horizon", type=_oracle_horizon_argument)
+    parser.add_argument("--hit-quality-alpha", type=float, default=0.5)
+    parser.add_argument("--hit-quality-metric", choices=("ru", "bd"), default="ru")
     parser.add_argument(
         "--oracle-retrieval-threshold",
         type=float,
@@ -206,6 +208,12 @@ def _validate_args(parser: argparse.ArgumentParser, args: argparse.Namespace) ->
         parser.error("--condition-name must be a name, not a path")
     if args.score_threshold is not None and args.score_threshold < 0:
         parser.error("--score-threshold must be non-negative")
+    if not 0 <= args.hit_quality_alpha <= 1:
+        parser.error("--hit-quality-alpha must be finite and in [0, 1]")
+    if args.schedule_policy == "oracle_hit_quality":
+        # Online query retrieval currently uses Memory.retrieve's fixed 0.5 cutoff.
+        if args.oracle_retrieval_threshold != 0.5 or args.score_threshold not in (None, 0.5):
+            parser.error("Hit quality must match actual online query retrieval threshold 0.5")
     if args.historical_utility_min_count < 1:
         parser.error("--historical-utility-min-count must be at least 1")
     if args.historical_utility_lambda < 0:
@@ -272,7 +280,7 @@ def _validate_args(parser: argparse.ArgumentParser, args: argparse.Namespace) ->
             "fifo_shortest_first",
             "oracle_coverage_historical_utility_v2",
             "oracle_coverage_historical_utility_v2_topk",
-            *EXACT_RETRIEVAL_POLICIES,
+            *FUTURE_WINDOW_POLICIES,
         }:
             parser.error(
                 f"--schedule-policy {args.schedule_policy} is only valid for "
@@ -292,13 +300,13 @@ def _validate_args(parser: argparse.ArgumentParser, args: argparse.Namespace) ->
             parser.error(
                 "--schedule-policy must be an online construction policy"
             )
-        if args.schedule_policy in EXACT_RETRIEVAL_POLICIES:
+        if args.schedule_policy in FUTURE_WINDOW_POLICIES:
             if args.oracle_lookahead_horizon is None:
                 args.oracle_lookahead_horizon = 1
         elif args.oracle_lookahead_horizon is not None:
             parser.error(
                 "--oracle-lookahead-horizon is only valid with "
-                "an exact-retrieval schedule policy"
+                "an exact-retrieval or hit-quality schedule policy"
             )
         if args.interval_size is None or args.interval_size < 1:
             parser.error("--interval-size must be at least 1 for online_construction")
@@ -779,7 +787,7 @@ def main(argv: Sequence[str] | None = None) -> int:
         condition_name = f"online_construction_random_seed{args.scheduler_seed}"
     elif (
         args.condition == "online_construction"
-        and args.schedule_policy in EXACT_RETRIEVAL_POLICIES
+        and args.schedule_policy in FUTURE_WINDOW_POLICIES
     ):
         horizon_suffix = (
             "all"
@@ -787,6 +795,10 @@ def main(argv: Sequence[str] | None = None) -> int:
             else str(args.oracle_lookahead_horizon)
         )
         condition_name = f"online_construction_{args.schedule_policy}_h{horizon_suffix}"
+        if args.schedule_policy == "oracle_hit_quality":
+            condition_name = (f"online_construction_oracle_hit_quality_"
+                              f"{args.hit_quality_metric}_h{horizon_suffix}"
+                              f"_alpha{args.hit_quality_alpha:g}")
     elif args.condition == "online_construction":
         condition_name = f"online_construction_{args.schedule_policy}"
     elif args.condition == "diversity_pool":
@@ -828,6 +840,8 @@ def main(argv: Sequence[str] | None = None) -> int:
             historical_utility_alpha=args.historical_utility_alpha,
             historical_utility_top_k=args.historical_utility_top_k,
             gain_normalization_epsilon=args.gain_normalization_epsilon,
+            hit_quality_alpha=args.hit_quality_alpha,
+            hit_quality_metric=args.hit_quality_metric,
         )
 
     frozen_task_queries: tuple[str, ...] | None = None
@@ -835,7 +849,7 @@ def main(argv: Sequence[str] | None = None) -> int:
     if (
         args.condition == "online_construction"
         and args.schedule_policy
-        in {*COVERAGE_POLICIES, *EXACT_RETRIEVAL_POLICIES}
+        in {*COVERAGE_POLICIES, *FUTURE_WINDOW_POLICIES}
     ):
         frozen_task_queries = _freeze_task_queries(
             [task["task_id"] for task in manifest["tasks"]],
@@ -863,6 +877,8 @@ def main(argv: Sequence[str] | None = None) -> int:
             scheduler = OracleSumScheduler()
 
     parameters = {
+        "hit_quality_alpha": args.hit_quality_alpha if args.schedule_policy == "oracle_hit_quality" else None,
+        "hit_quality_metric": args.hit_quality_metric if args.schedule_policy == "oracle_hit_quality" else None,
         "model": settings.model_name,
         "routed_model": routed_model,
         "agent_api_base_url": settings.api_base_url,
@@ -992,7 +1008,7 @@ def main(argv: Sequence[str] | None = None) -> int:
                 else "long_horizon_exact_retrieval"
             )
             if args.condition == "online_construction"
-            and args.schedule_policy in EXACT_RETRIEVAL_POLICIES
+            and args.schedule_policy in FUTURE_WINDOW_POLICIES
             else "next_interval_normalized_coverage_historical_utility"
             if args.condition == "online_construction"
             and args.schedule_policy
@@ -1008,25 +1024,25 @@ def main(argv: Sequence[str] | None = None) -> int:
             and args.schedule_policy in HISTORICAL_UTILITY_V2_POLICIES
             else "v1"
             if args.condition == "online_construction"
-            and args.schedule_policy in EXACT_RETRIEVAL_POLICIES
+            and args.schedule_policy in FUTURE_WINDOW_POLICIES
             else None
         ),
         "oracle_requested_lookahead_horizon": (
             args.oracle_lookahead_horizon
             if args.condition == "online_construction"
-            and args.schedule_policy in EXACT_RETRIEVAL_POLICIES
+            and args.schedule_policy in FUTURE_WINDOW_POLICIES
             else None
         ),
         "oracle_retrieval_top_k": (
             online_controller.retrieval_top_k
             if args.condition == "online_construction"
-            and args.schedule_policy in EXACT_RETRIEVAL_POLICIES
+            and args.schedule_policy in FUTURE_WINDOW_POLICIES
             else None
         ),
         "oracle_retrieval_threshold": (
             online_controller.retrieval_score_threshold
             if args.condition == "online_construction"
-            and args.schedule_policy in EXACT_RETRIEVAL_POLICIES
+            and args.schedule_policy in FUTURE_WINDOW_POLICIES
             else None
         ),
         "historical_utility_min_count": (
@@ -1163,7 +1179,7 @@ def main(argv: Sequence[str] | None = None) -> int:
             }
             else "faiss_squared_l2_topk_threshold_marginal_gain"
             if args.condition == "online_construction"
-            and args.schedule_policy in EXACT_RETRIEVAL_POLICIES
+            and args.schedule_policy in FUTURE_WINDOW_POLICIES
             else None
         ),
         "oracle_higher_is_better": (
@@ -1173,7 +1189,7 @@ def main(argv: Sequence[str] | None = None) -> int:
             else True
             if args.condition == "online_construction"
             and args.schedule_policy
-            in {*COVERAGE_POLICIES, *EXACT_RETRIEVAL_POLICIES}
+            in {*COVERAGE_POLICIES, *FUTURE_WINDOW_POLICIES}
             else None
         ),
         "scheduler_score_type": (
@@ -1189,6 +1205,12 @@ def main(argv: Sequence[str] | None = None) -> int:
             else None
         ),
     }
+    if args.schedule_policy == "oracle_hit_quality":
+        parameters.update(
+            oracle_objective=f"normalized_hit_plus_{args.hit_quality_metric}_gain",
+            oracle_score_type=f"hit_quality_{args.hit_quality_metric}",
+            score_threshold=0.5,
+        )
     write_json(condition_dir / "experiment.json", parameters)
     examples = json.loads(DEFAULT_EXAMPLES_PATH.read_text(encoding="utf-8"))
 
@@ -1461,7 +1483,7 @@ def main(argv: Sequence[str] | None = None) -> int:
                     next_interval_queries = frozen_task_queries[
                         batch_end:next_interval_end
                     ]
-                elif args.schedule_policy in EXACT_RETRIEVAL_POLICIES:
+                elif args.schedule_policy in FUTURE_WINDOW_POLICIES:
                     (
                         future_queries,
                         effective_lookahead_horizon,
