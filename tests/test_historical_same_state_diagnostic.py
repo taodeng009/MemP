@@ -242,6 +242,89 @@ class HistoricalSameStateDiagnosticTests(unittest.TestCase):
             0.5,
         )
 
+    def test_exact_retrieval_policy_is_selected_by_option(self):
+        snapshot = {
+            "snapshot_interval": 1,
+            "history": [
+                {"task_index": 0, "query": "h0"},
+                {"task_index": 1, "query": "h1"},
+                {"task_index": 2, "query": "h2"},
+            ],
+            "available_memories": [
+                {"memory_id": "m", "source_task_index": 0, "query": "h0"}
+            ],
+            "pending_candidates": [
+                {"memory_id": "a", "source_task_index": 0, "query": "h1"},
+                {"memory_id": "b", "source_task_index": 1, "query": "h0"},
+                {"memory_id": "c", "source_task_index": 2, "query": "far"},
+            ],
+            "future_tasks": [{"task_index": 3, "query": "h1"}],
+            "source_parameters": {"top_k": 3, "score_threshold": 0.5},
+        }
+        report = analyze_same_state(
+            snapshot,
+            FakeEmbedding(
+                {"h0": 0.0, "h1": 10.0, "h2": 5.0, "far": 20.0}
+            ),
+            capacity=1,
+            historical_policy="historical_cross_task_exact_retrieval",
+        )
+
+        self.assertEqual(
+            report["historical_policy"],
+            "historical_cross_task_exact_retrieval",
+        )
+        self.assertEqual(report["future_oracle_policy"], "oracle_exact_retrieval")
+        self.assertEqual(report["selections"]["historical_cross_task"], ["a"])
+        self.assertEqual(report["selections"]["future_oracle"], ["a"])
+        self.assertEqual(
+            report["first_step_scores"]["a"]["historical"][
+                "retrieval_utility_gain"
+            ],
+            0.5,
+        )
+
+    def test_hit_quality_policy_uses_alpha_and_metric_options(self):
+        snapshot = {
+            "snapshot_interval": 0,
+            "history": [
+                {"task_index": 0, "query": "zero"},
+                {"task_index": 1, "query": "one"},
+            ],
+            "available_memories": [],
+            "pending_candidates": [
+                {
+                    "memory_id": "a",
+                    "source_task_index": 0,
+                    "query": "one",
+                },
+                {
+                    "memory_id": "b",
+                    "source_task_index": 1,
+                    "query": "zero",
+                },
+            ],
+            "future_tasks": [{"task_index": 2, "query": "zero"}],
+            "source_parameters": {"top_k": 1, "score_threshold": 0.5},
+        }
+        report = analyze_same_state(
+            snapshot,
+            FakeEmbedding({"zero": 0.0, "one": 1.0}),
+            capacity=1,
+            historical_policy="historical_cross_task_hit_quality",
+            hit_quality_alpha=0.25,
+            hit_quality_metric="ru",
+        )
+
+        self.assertEqual(report["future_oracle_policy"], "oracle_hit_quality")
+        self.assertEqual(report["hit_quality_alpha"], 0.25)
+        self.assertEqual(report["hit_quality_metric"], "ru")
+        detail = report["first_step_scores"]["a"]["historical"]
+        self.assertFalse(detail["coverage_bootstrap"])
+        self.assertIn("hit_gain", detail)
+        self.assertIn("quality_gain", detail)
+        self.assertIn("priority", detail)
+
     def test_available_memory_is_excluded_from_its_own_source_task(self):
         snapshot = {
             "snapshot_interval": 1,

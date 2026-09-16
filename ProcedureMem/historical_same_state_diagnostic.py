@@ -1,4 +1,4 @@
-"""Offline same-state diagnostic for historical cross-task coverage."""
+"""Offline same-state diagnostic for historical cross-task scheduling."""
 
 from __future__ import annotations
 
@@ -9,7 +9,12 @@ from pathlib import Path
 from typing import Any, Mapping, Sequence
 
 from ProcedureMem.candidate_utility import read_jsonl
-from ProcedureMem.cloud_scheduling import OracleCoverageScheduler, load_cached_embedding
+from ProcedureMem.cloud_scheduling import (
+    OracleCoverageScheduler,
+    OracleExactRetrievalScheduler,
+    OracleHitQualityScheduler,
+    load_cached_embedding,
+)
 
 
 REQUIRED_FILES = (
@@ -18,6 +23,12 @@ REQUIRED_FILES = (
     "online_trajectories.jsonl",
     "queue_events.jsonl",
     "construction_events.jsonl",
+)
+
+HISTORICAL_POLICIES = (
+    "historical_cross_task_coverage",
+    "historical_cross_task_exact_retrieval",
+    "historical_cross_task_hit_quality",
 )
 
 
@@ -340,8 +351,265 @@ def aggregate_retrieval_metrics(
     return aggregated
 
 
+def _select_policy(
+    policy: str,
+    pending_ids: Sequence[str],
+    capacity: int,
+    *,
+    available_ids: Sequence[str],
+    queries: Sequence[str],
+    distances: Mapping[str, Sequence[float]],
+    top_k: int,
+    score_threshold: float,
+    hit_quality_alpha: float,
+    hit_quality_metric: str,
+    eligibility_by_id: Mapping[str, Sequence[bool]] | None = None,
+):
+    def scorer(_queries, requested):
+        return {item_id: distances[item_id] for item_id in requested}
+
+    if policy == "historical_cross_task_coverage":
+        return OracleCoverageScheduler().select(
+            pending_ids,
+            capacity,
+            available_ids=available_ids,
+            next_interval_queries=queries,
+            distance_scorer=scorer,
+            eligibility_by_id=eligibility_by_id,
+        )
+    if policy == "historical_cross_task_exact_retrieval":
+        return OracleExactRetrievalScheduler().select(
+            pending_ids,
+            capacity,
+            available_ids=available_ids,
+            future_queries=queries,
+            distance_scorer=scorer,
+            top_k=top_k,
+            score_threshold=score_threshold,
+            eligibility_by_id=eligibility_by_id,
+        )
+    if policy == "historical_cross_task_hit_quality":
+        return OracleHitQualityScheduler().select(
+            pending_ids,
+            capacity,
+            available_ids=available_ids,
+            future_queries=queries,
+            distance_scorer=scorer,
+            top_k=top_k,
+            score_threshold=score_threshold,
+            alpha=hit_quality_alpha,
+            metric=hit_quality_metric,
+            eligibility_by_id=eligibility_by_id,
+        )
+    raise ValueError(f"Unsupported historical policy: {policy}")
+
+
+def _first_step_policy_scores(
+    policy: str,
+    pending_ids: Sequence[str],
+    available_ids: Sequence[str],
+    distances: Mapping[str, Sequence[float]],
+    *,
+    top_k: int,
+    score_threshold: float,
+    hit_quality_alpha: float,
+    hit_quality_metric: str,
+    eligibility_by_id: Mapping[str, Sequence[bool]] | None = None,
+) -> tuple[dict[str, tuple[float, ...]], dict[str, dict[str, Any]]]:
+    """Return each candidate's score in the scheduler's first greedy step."""
+    query_count = len(next(iter(distances.values())))
+    eligibility = {
+        memory_id: tuple(
+            bool(value) for value in eligibility_by_id[memory_id]
+        )
+        if eligibility_by_id is not None
+        else (True,) * query_count
+        for memory_id in (*available_ids, *pending_ids)
+    }
+    best = [
+        min(
+            (
+                float(distances[memory_id][index])
+                for memory_id in available_ids
+                if eligibility[memory_id][index]
+            ),
+            default=float("inf"),
+        )
+        for index in range(query_count)
+    ]
+    if policy == "historical_cross_task_coverage":
+        scores: dict[str, tuple[float, ...]] = {}
+        details: dict[str, dict[str, Any]] = {}
+        for memory_id in pending_ids:
+            if available_ids:
+                newly_covered = sum(
+                    eligibility[memory_id][index]
+                    and not math.isfinite(best[index])
+                    for index in range(query_count)
+                )
+                finite_gain = sum(
+                    max(
+                        0.0,
+                        best[index] - float(distances[memory_id][index]),
+                    )
+                    for index in range(query_count)
+                    if eligibility[memory_id][index]
+                    and math.isfinite(best[index])
+                )
+                scores[memory_id] = (
+                    float(newly_covered),
+                    float(finite_gain),
+                )
+                details[memory_id] = {
+                    "newly_covered": float(newly_covered),
+                    "finite_gain": float(finite_gain),
+                }
+            else:
+                distance_sum = sum(
+                    float(distances[memory_id][index])
+                    for index in range(query_count)
+                    if eligibility[memory_id][index]
+                )
+                scores[memory_id] = (-float(distance_sum),)
+                details[memory_id] = {
+                    "bootstrap_distance_sum": float(distance_sum)
+                }
+        return scores, details
+
+    current_top = [
+        tuple(
+            sorted(
+                float(distances[memory_id][index])
+                for memory_id in available_ids
+                if eligibility[memory_id][index]
+            )[:top_k]
+        )
+        for index in range(query_count)
+    ]
+    utility = lambda values: float(
+        sum(max(0.0, score_threshold - value) for value in values)
+    )
+    before_utility = sum(utility(values) for values in current_top)
+    updated_top: dict[str, list[tuple[float, ...]]] = {}
+    utility_gains: dict[str, float] = {}
+    hit_gains: dict[str, float] = {}
+    bd_gains: dict[str, float] = {}
+    for memory_id in pending_ids:
+        updated_top[memory_id] = [
+            tuple(
+                sorted(
+                    (
+                        *current_top[index],
+                        *(
+                            (float(distances[memory_id][index]),)
+                            if eligibility[memory_id][index]
+                            else ()
+                        ),
+                    )
+                )[:top_k]
+            )
+            for index in range(query_count)
+        ]
+        utility_gains[memory_id] = max(
+            0.0,
+            sum(utility(values) for values in updated_top[memory_id])
+            - before_utility,
+        )
+        hit_gains[memory_id] = float(
+            sum(
+                eligibility[memory_id][index]
+                and best[index] > score_threshold
+                and float(distances[memory_id][index]) <= score_threshold
+                for index in range(query_count)
+            )
+        )
+        bd_gains[memory_id] = float(
+            sum(
+                max(
+                    0.0,
+                    best[index] - float(distances[memory_id][index]),
+                )
+                for index in range(query_count)
+                if eligibility[memory_id][index]
+                and math.isfinite(best[index])
+            )
+        )
+    if policy == "historical_cross_task_exact_retrieval":
+        return (
+            {memory_id: (utility_gains[memory_id],) for memory_id in pending_ids},
+            {
+                memory_id: {"retrieval_utility_gain": utility_gains[memory_id]}
+                for memory_id in pending_ids
+            },
+        )
+
+    if hit_quality_metric not in {"bd", "ru"}:
+        raise ValueError("Hit quality metric must be bd or ru")
+    bootstrap = hit_quality_metric == "bd" and not available_ids
+    if bootstrap:
+        scores = {}
+        details = {}
+        for memory_id in pending_ids:
+            distance_sum = sum(
+                float(distances[memory_id][index])
+                for index in range(query_count)
+                if eligibility[memory_id][index]
+            )
+            scores[memory_id] = (-float(distance_sum),)
+            details[memory_id] = {
+                "coverage_bootstrap": True,
+                "bootstrap_distance_sum": float(distance_sum),
+                "hit_gain": hit_gains[memory_id],
+            }
+        return scores, details
+
+    quality_gains = bd_gains if hit_quality_metric == "bd" else utility_gains
+    hit_max = max(hit_gains.values(), default=0.0)
+    quality_max = max(quality_gains.values(), default=0.0)
+    normalized_hit = {
+        memory_id: hit_gains[memory_id] / (hit_max + 1e-8)
+        for memory_id in pending_ids
+    }
+    normalized_quality = {
+        memory_id: quality_gains[memory_id] / (quality_max + 1e-8)
+        for memory_id in pending_ids
+    }
+    priorities = {
+        memory_id: hit_quality_alpha * normalized_hit[memory_id]
+        + (1.0 - hit_quality_alpha) * normalized_quality[memory_id]
+        for memory_id in pending_ids
+    }
+    ordering = (
+        quality_gains
+        if hit_quality_alpha == 0
+        else hit_gains
+        if hit_quality_alpha == 1
+        else priorities
+    )
+    return (
+        {memory_id: (float(ordering[memory_id]),) for memory_id in pending_ids},
+        {
+            memory_id: {
+                "coverage_bootstrap": False,
+                "hit_gain": hit_gains[memory_id],
+                "quality_gain": quality_gains[memory_id],
+                "normalized_hit_gain": normalized_hit[memory_id],
+                "normalized_quality_gain": normalized_quality[memory_id],
+                "priority": priorities[memory_id],
+            }
+            for memory_id in pending_ids
+        },
+    )
+
+
 def analyze_same_state(
-    snapshot: Mapping[str, Any], embedding: Any, *, capacity: int
+    snapshot: Mapping[str, Any],
+    embedding: Any,
+    *,
+    capacity: int,
+    historical_policy: str = "historical_cross_task_coverage",
+    hit_quality_alpha: float = 0.5,
+    hit_quality_metric: str = "ru",
 ) -> dict[str, Any]:
     if capacity < 1:
         raise ValueError("capacity must be at least 1")
@@ -367,93 +635,70 @@ def analyze_same_state(
         )
         for memory_id in memory_ids
     }
-
-    def scorer(matrix):
-        return lambda _queries, requested: {
-            item_id: matrix[item_id] for item_id in requested
-        }
-
-    scheduler = OracleCoverageScheduler()
-    historical = scheduler.select(
-        pending_ids,
-        capacity,
-        available_ids=available_ids,
-        next_interval_queries=[str(row["query"]) for row in history],
-        distance_scorer=scorer(historical_distances),
-        eligibility_by_id=eligibility,
-    )
-    oracle = scheduler.select(
-        pending_ids,
-        capacity,
-        available_ids=available_ids,
-        next_interval_queries=[str(row["query"]) for row in future],
-        distance_scorer=scorer(future_distances),
-    )
-    fifo_ids = pending_ids[:capacity]
-    historical_ids = list(historical.memory_ids)
-    oracle_ids = list(oracle.memory_ids)
+    if historical_policy not in HISTORICAL_POLICIES:
+        raise ValueError(f"Unsupported historical policy: {historical_policy}")
+    if not math.isfinite(hit_quality_alpha) or not 0 <= hit_quality_alpha <= 1:
+        raise ValueError("hit_quality_alpha must be finite and in [0, 1]")
+    if hit_quality_metric not in {"bd", "ru"}:
+        raise ValueError("hit_quality_metric must be bd or ru")
     source_parameters = snapshot.get("source_parameters") or {}
-    retrieval_top_k = int(source_parameters.get("top_k") or 3)
+    top_k_value = source_parameters.get("top_k")
+    retrieval_top_k = int(3 if top_k_value is None else top_k_value)
     threshold_value = source_parameters.get("score_threshold")
     retrieval_threshold = float(
         0.5 if threshold_value is None else threshold_value
     )
-
-    historical_first_scores: dict[str, tuple[float, ...]] = {}
-    oracle_first_scores: dict[str, tuple[float, ...]] = {}
-    historical_best = [
-        min(
-            (
-                historical_distances[memory_id][index]
-                for memory_id in available_ids
-                if eligibility[memory_id][index]
-            ),
-            default=float("inf"),
-        )
-        for index in range(len(history))
-    ]
-    oracle_best = [
-        min(
-            (future_distances[memory_id][index] for memory_id in available_ids),
-            default=float("inf"),
-        )
-        for index in range(len(future))
-    ]
-    for memory_id in pending_ids:
-        historical_new = sum(
-            eligibility[memory_id][index] and not math.isfinite(historical_best[index])
-            for index in range(len(history))
-        )
-        historical_gain = sum(
-            max(
-                0.0,
-                historical_best[index] - historical_distances[memory_id][index],
-            )
-            for index in range(len(history))
-            if eligibility[memory_id][index]
-            and math.isfinite(historical_best[index])
-        )
-        oracle_gain = sum(
-            max(0.0, oracle_best[index] - future_distances[memory_id][index])
-            for index in range(len(future))
-        )
-        if available_ids:
-            historical_first_scores[memory_id] = (
-                float(historical_new),
-                float(historical_gain),
-            )
-            oracle_first_scores[memory_id] = (float(oracle_gain),)
-        else:
-            historical_distance_sum = sum(
-                historical_distances[memory_id][index]
-                for index in range(len(history))
-                if eligibility[memory_id][index]
-            )
-            oracle_distance_sum = sum(future_distances[memory_id])
-            historical_first_scores[memory_id] = (
-                -float(historical_distance_sum),
-            )
-            oracle_first_scores[memory_id] = (-float(oracle_distance_sum),)
+    historical_queries = [str(row["query"]) for row in history]
+    future_queries = [str(row["query"]) for row in future]
+    historical = _select_policy(
+        historical_policy,
+        pending_ids,
+        capacity,
+        available_ids=available_ids,
+        queries=historical_queries,
+        distances=historical_distances,
+        top_k=retrieval_top_k,
+        score_threshold=retrieval_threshold,
+        hit_quality_alpha=hit_quality_alpha,
+        hit_quality_metric=hit_quality_metric,
+        eligibility_by_id=eligibility,
+    )
+    oracle = _select_policy(
+        historical_policy,
+        pending_ids,
+        capacity,
+        available_ids=available_ids,
+        queries=future_queries,
+        distances=future_distances,
+        top_k=retrieval_top_k,
+        score_threshold=retrieval_threshold,
+        hit_quality_alpha=hit_quality_alpha,
+        hit_quality_metric=hit_quality_metric,
+    )
+    fifo_ids = pending_ids[:capacity]
+    historical_ids = list(historical.memory_ids)
+    oracle_ids = list(oracle.memory_ids)
+    historical_first_scores, historical_first_details = _first_step_policy_scores(
+        historical_policy,
+        pending_ids,
+        available_ids,
+        historical_distances,
+        top_k=retrieval_top_k,
+        score_threshold=retrieval_threshold,
+        hit_quality_alpha=hit_quality_alpha,
+        hit_quality_metric=hit_quality_metric,
+        eligibility_by_id=eligibility,
+    )
+    oracle_first_scores, oracle_first_details = _first_step_policy_scores(
+        historical_policy,
+        pending_ids,
+        available_ids,
+        future_distances,
+        top_k=retrieval_top_k,
+        score_threshold=retrieval_threshold,
+        hit_quality_alpha=hit_quality_alpha,
+        hit_quality_metric=hit_quality_metric,
+    )
 
     gains = {
         "fifo": _future_coverage_gain(available_ids, fifo_ids, future_distances),
@@ -499,8 +744,56 @@ def analyze_same_state(
     oracle_gain = gains["future_oracle"]
     overlap = set(historical_ids) & set(oracle_ids)
     fifo_overlap = set(fifo_ids) & set(oracle_ids)
+    if historical_policy == "historical_cross_task_coverage":
+        first_step_details = {
+            item_id: (
+                {
+                    "historical_newly_covered": historical_first_details[item_id][
+                        "newly_covered"
+                    ],
+                    "historical_finite_gain": historical_first_details[item_id][
+                        "finite_gain"
+                    ],
+                    "future_oracle_gain": oracle_first_details[item_id][
+                        "finite_gain"
+                    ],
+                }
+                if available_ids
+                else {
+                    "historical_bootstrap_distance_sum": historical_first_details[
+                        item_id
+                    ]["bootstrap_distance_sum"],
+                    "future_oracle_bootstrap_distance_sum": oracle_first_details[
+                        item_id
+                    ]["bootstrap_distance_sum"],
+                }
+            )
+            for item_id in pending_ids
+        }
+    else:
+        first_step_details = {
+            item_id: {
+                "historical": historical_first_details[item_id],
+                "future_oracle": oracle_first_details[item_id],
+            }
+            for item_id in pending_ids
+        }
     return {
         "snapshot_interval": int(snapshot["snapshot_interval"]),
+        "historical_policy": historical_policy,
+        "future_oracle_policy": historical_policy.replace(
+            "historical_cross_task_", "oracle_"
+        ),
+        "hit_quality_alpha": (
+            hit_quality_alpha
+            if historical_policy == "historical_cross_task_hit_quality"
+            else None
+        ),
+        "hit_quality_metric": (
+            hit_quality_metric
+            if historical_policy == "historical_cross_task_hit_quality"
+            else None
+        ),
         "capacity": min(capacity, len(pending_ids)),
         "history_count": len(history),
         "available_count": len(available_ids),
@@ -522,25 +815,7 @@ def analyze_same_state(
         "historical_vs_oracle_first_step_spearman": _spearman(
             historical_first_scores, oracle_first_scores
         ),
-        "first_step_scores": {
-            item_id: (
-                {
-                    "historical_newly_covered": historical_first_scores[item_id][0],
-                    "historical_finite_gain": historical_first_scores[item_id][1],
-                    "future_oracle_gain": oracle_first_scores[item_id][0],
-                }
-                if available_ids
-                else {
-                    "historical_bootstrap_distance_sum": -historical_first_scores[
-                        item_id
-                    ][0],
-                    "future_oracle_bootstrap_distance_sum": -oracle_first_scores[
-                        item_id
-                    ][0],
-                }
-            )
-            for item_id in pending_ids
-        },
+        "first_step_scores": first_step_details,
         "realized_future_coverage_gain": gains,
         "realized_future_nearest_distance_sum": distance_sums,
         "future_retrieval_config": {
@@ -618,6 +893,15 @@ def main(argv: Sequence[str] | None = None) -> int:
     parser.add_argument("--source-run-dir", type=Path, required=True)
     parser.add_argument("--snapshot-interval", type=int)
     parser.add_argument("--capacity", type=int)
+    parser.add_argument(
+        "--historical-policy",
+        choices=HISTORICAL_POLICIES,
+        default="historical_cross_task_coverage",
+    )
+    parser.add_argument("--hit-quality-alpha", type=float, default=0.5)
+    parser.add_argument(
+        "--hit-quality-metric", choices=("ru", "bd"), default="ru"
+    )
     parser.add_argument("--output", type=Path)
     args = parser.parse_args(argv)
     capacity = (
@@ -627,6 +911,8 @@ def main(argv: Sequence[str] | None = None) -> int:
     )
     if capacity < 1:
         parser.error("--capacity must be at least 1")
+    if not math.isfinite(args.hit_quality_alpha) or not 0 <= args.hit_quality_alpha <= 1:
+        parser.error("--hit-quality-alpha must be finite and in [0, 1]")
     intervals = (
         [args.snapshot_interval]
         if args.snapshot_interval is not None
@@ -634,13 +920,20 @@ def main(argv: Sequence[str] | None = None) -> int:
     )
     if not intervals:
         raise ValueError("Source run has no eligible snapshot intervals")
-    output = args.output or (
-        args.source_run_dir
-        / (
-            f"historical_same_state_interval_{args.snapshot_interval}.json"
-            if args.snapshot_interval is not None
-            else "historical_same_state_all_intervals.json"
+    if args.historical_policy == "historical_cross_task_coverage":
+        output_stem = "historical_same_state"
+    elif args.historical_policy == "historical_cross_task_exact_retrieval":
+        output_stem = "historical_exact_retrieval_same_state"
+    else:
+        alpha_label = format(args.hit_quality_alpha, "g").replace(".", "p")
+        output_stem = (
+            f"historical_hit_quality_{args.hit_quality_metric}_alpha{alpha_label}"
+            "_same_state"
         )
+    output = args.output or args.source_run_dir / (
+        f"{output_stem}_interval_{args.snapshot_interval}.json"
+        if args.snapshot_interval is not None
+        else f"{output_stem}_all_intervals.json"
     )
     embedding = load_cached_embedding(output.parent / "same_state_embedding_cache")
     reports = [
@@ -648,6 +941,9 @@ def main(argv: Sequence[str] | None = None) -> int:
             load_same_state_snapshot(args.source_run_dir, interval),
             embedding,
             capacity=capacity,
+            historical_policy=args.historical_policy,
+            hit_quality_alpha=args.hit_quality_alpha,
+            hit_quality_metric=args.hit_quality_metric,
         )
         for interval in intervals
     ]
@@ -656,6 +952,10 @@ def main(argv: Sequence[str] | None = None) -> int:
         if args.snapshot_interval is not None
         else {
             "source_run_dir": str(args.source_run_dir.expanduser().resolve()),
+            "historical_policy": args.historical_policy,
+            "future_oracle_policy": reports[0]["future_oracle_policy"],
+            "hit_quality_alpha": reports[0]["hit_quality_alpha"],
+            "hit_quality_metric": reports[0]["hit_quality_metric"],
             "capacity": capacity,
             "snapshot_count": len(reports),
             "snapshot_intervals": intervals,
