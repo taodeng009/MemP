@@ -251,6 +251,95 @@ def _future_distance_sum(
     )
 
 
+def _future_retrieval_metrics(
+    available_ids: Sequence[str],
+    selected_ids: Sequence[str],
+    distances: Mapping[str, Sequence[float]],
+    *,
+    top_k: int,
+    score_threshold: float,
+) -> dict[str, Any]:
+    """Evaluate virtual post-selection retrieval using the experiment settings."""
+    if top_k < 1:
+        raise ValueError("retrieval top_k must be at least 1")
+    if score_threshold < 0:
+        raise ValueError("retrieval score_threshold cannot be negative")
+    pool = [*available_ids, *selected_ids]
+    if not pool:
+        raise ValueError("Future retrieval requires a non-empty virtual memory pool")
+    query_count = len(next(iter(distances.values())))
+    hit_count = 0
+    best_distance_sum_hit = 0.0
+    retrieval_utility_sum = 0.0
+    for index in range(query_count):
+        top_distances = sorted(
+            float(distances[memory_id][index]) for memory_id in pool
+        )[:top_k]
+        retrieved = [
+            distance
+            for distance in top_distances
+            if distance <= score_threshold
+        ]
+        if retrieved:
+            hit_count += 1
+            best_distance_sum_hit += retrieved[0]
+        retrieval_utility_sum += sum(
+            max(0.0, score_threshold - distance) for distance in retrieved
+        )
+    return {
+        "task_count": query_count,
+        "hit_count": hit_count,
+        "hr": hit_count / query_count if query_count else None,
+        "bd": (
+            best_distance_sum_hit / hit_count if hit_count else None
+        ),
+        "ru": (
+            retrieval_utility_sum / query_count if query_count else None
+        ),
+        "best_distance_sum_hit": best_distance_sum_hit,
+        "retrieval_utility_sum": retrieval_utility_sum,
+    }
+
+
+def aggregate_retrieval_metrics(
+    reports: Sequence[Mapping[str, Any]],
+) -> dict[str, dict[str, Any]]:
+    """Pool interval sufficient statistics into overall HR, conditional BD, and RU."""
+    strategy_names = (
+        "fifo",
+        "historical_cross_task",
+        "future_oracle",
+    )
+    aggregated: dict[str, dict[str, Any]] = {}
+    for strategy in strategy_names:
+        rows = [
+            report["realized_future_retrieval_metrics"][strategy]
+            for report in reports
+        ]
+        task_count = sum(int(row["task_count"]) for row in rows)
+        hit_count = sum(int(row["hit_count"]) for row in rows)
+        best_distance_sum_hit = sum(
+            float(row["best_distance_sum_hit"]) for row in rows
+        )
+        retrieval_utility_sum = sum(
+            float(row["retrieval_utility_sum"]) for row in rows
+        )
+        aggregated[strategy] = {
+            "task_count": task_count,
+            "hit_count": hit_count,
+            "hr": hit_count / task_count if task_count else None,
+            "bd": (
+                best_distance_sum_hit / hit_count if hit_count else None
+            ),
+            "ru": (
+                retrieval_utility_sum / task_count if task_count else None
+            ),
+            "best_distance_sum_hit": best_distance_sum_hit,
+            "retrieval_utility_sum": retrieval_utility_sum,
+        }
+    return aggregated
+
+
 def analyze_same_state(
     snapshot: Mapping[str, Any], embedding: Any, *, capacity: int
 ) -> dict[str, Any]:
@@ -303,6 +392,12 @@ def analyze_same_state(
     fifo_ids = pending_ids[:capacity]
     historical_ids = list(historical.memory_ids)
     oracle_ids = list(oracle.memory_ids)
+    source_parameters = snapshot.get("source_parameters") or {}
+    retrieval_top_k = int(source_parameters.get("top_k") or 3)
+    threshold_value = source_parameters.get("score_threshold")
+    retrieval_threshold = float(
+        0.5 if threshold_value is None else threshold_value
+    )
 
     historical_first_scores: dict[str, tuple[float, ...]] = {}
     oracle_first_scores: dict[str, tuple[float, ...]] = {}
@@ -378,6 +473,29 @@ def analyze_same_state(
             available_ids, oracle_ids, future_distances
         ),
     }
+    retrieval_metrics = {
+        "fifo": _future_retrieval_metrics(
+            available_ids,
+            fifo_ids,
+            future_distances,
+            top_k=retrieval_top_k,
+            score_threshold=retrieval_threshold,
+        ),
+        "historical_cross_task": _future_retrieval_metrics(
+            available_ids,
+            historical_ids,
+            future_distances,
+            top_k=retrieval_top_k,
+            score_threshold=retrieval_threshold,
+        ),
+        "future_oracle": _future_retrieval_metrics(
+            available_ids,
+            oracle_ids,
+            future_distances,
+            top_k=retrieval_top_k,
+            score_threshold=retrieval_threshold,
+        ),
+    }
     oracle_gain = gains["future_oracle"]
     overlap = set(historical_ids) & set(oracle_ids)
     fifo_overlap = set(fifo_ids) & set(oracle_ids)
@@ -425,6 +543,11 @@ def analyze_same_state(
         },
         "realized_future_coverage_gain": gains,
         "realized_future_nearest_distance_sum": distance_sums,
+        "future_retrieval_config": {
+            "top_k": retrieval_top_k,
+            "score_threshold": retrieval_threshold,
+        },
+        "realized_future_retrieval_metrics": retrieval_metrics,
         "oracle_gain_recovery": {
             "historical": (
                 gains["historical_cross_task"] / oracle_gain
@@ -536,6 +659,10 @@ def main(argv: Sequence[str] | None = None) -> int:
             "capacity": capacity,
             "snapshot_count": len(reports),
             "snapshot_intervals": intervals,
+            "future_retrieval_config": reports[0]["future_retrieval_config"],
+            "aggregate_future_retrieval_metrics": aggregate_retrieval_metrics(
+                reports
+            ),
             "snapshots": reports,
         }
     )

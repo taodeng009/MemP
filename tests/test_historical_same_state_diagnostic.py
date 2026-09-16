@@ -4,6 +4,7 @@ import unittest
 from pathlib import Path
 
 from ProcedureMem.historical_same_state_diagnostic import (
+    aggregate_retrieval_metrics,
     analyze_same_state,
     load_same_state_snapshot,
     snapshot_intervals,
@@ -153,6 +154,18 @@ class HistoricalSameStateDiagnosticTests(unittest.TestCase):
             "historical_bootstrap_distance_sum",
             report["first_step_scores"]["a"],
         )
+        self.assertEqual(
+            report["realized_future_retrieval_metrics"]["future_oracle"],
+            {
+                "task_count": 1,
+                "hit_count": 1,
+                "hr": 1.0,
+                "bd": 0.0,
+                "ru": 0.5,
+                "best_distance_sum_hit": 0.0,
+                "retrieval_utility_sum": 0.5,
+            },
+        )
 
     def test_reports_overlap_ranking_and_oracle_gain_recovery(self):
         snapshot = {
@@ -213,6 +226,21 @@ class HistoricalSameStateDiagnosticTests(unittest.TestCase):
         self.assertIsNotNone(
             report["historical_vs_oracle_first_step_spearman"]
         )
+        self.assertEqual(
+            report["realized_future_retrieval_metrics"]["historical_cross_task"][
+                "hr"
+            ],
+            0.0,
+        )
+        self.assertIsNone(
+            report["realized_future_retrieval_metrics"]["historical_cross_task"][
+                "bd"
+            ]
+        )
+        self.assertEqual(
+            report["realized_future_retrieval_metrics"]["future_oracle"]["ru"],
+            0.5,
+        )
 
     def test_available_memory_is_excluded_from_its_own_source_task(self):
         snapshot = {
@@ -245,6 +273,49 @@ class HistoricalSameStateDiagnosticTests(unittest.TestCase):
 
         score = report["first_step_scores"]["cross"]
         self.assertEqual(score["historical_newly_covered"], 1.0)
+
+    def test_retrieval_metrics_use_source_top_k_threshold_and_pool_weighting(self):
+        snapshot = {
+            "snapshot_interval": 0,
+            "history": [{"task_index": 0, "query": "zero"}],
+            "available_memories": [],
+            "pending_candidates": [
+                {
+                    "memory_id": "a",
+                    "source_task_index": 0,
+                    "query": "zero",
+                },
+                {
+                    "memory_id": "b",
+                    "source_task_index": 0,
+                    "query": "half",
+                },
+            ],
+            "future_tasks": [
+                {"task_index": 1, "query": "zero"},
+                {"task_index": 2, "query": "one"},
+            ],
+            "source_parameters": {"top_k": 2, "score_threshold": 1.0},
+        }
+        report = analyze_same_state(
+            snapshot,
+            FakeEmbedding({"zero": 0.0, "half": 0.5, "one": 1.0}),
+            capacity=2,
+        )
+
+        metrics = report["realized_future_retrieval_metrics"]["fifo"]
+        self.assertEqual(report["future_retrieval_config"]["top_k"], 2)
+        self.assertEqual(metrics["hit_count"], 2)
+        self.assertEqual(metrics["hr"], 1.0)
+        self.assertEqual(metrics["bd"], 0.125)
+        self.assertEqual(metrics["ru"], 1.25)
+
+        overall = aggregate_retrieval_metrics([report, report])["fifo"]
+        self.assertEqual(overall["task_count"], 4)
+        self.assertEqual(overall["hit_count"], 4)
+        self.assertEqual(overall["hr"], 1.0)
+        self.assertEqual(overall["bd"], 0.125)
+        self.assertEqual(overall["ru"], 1.25)
 
 
 if __name__ == "__main__":
