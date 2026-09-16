@@ -19,6 +19,7 @@ from ProcedureMem.online_construction import (
 from ProcedureMem.cloud_scheduling import (
     OracleCoverageScheduler,
     OracleExactRetrievalScheduler,
+    OracleHitQualityScheduler,
 )
 
 
@@ -89,6 +90,114 @@ def result(
             {"from": "human", "value": "Observation: done"},
         ],
     }
+
+
+class HistoricalCrossTaskTests(unittest.TestCase):
+    @staticmethod
+    def scorer(matrix):
+        def score(_queries, requested_ids):
+            return {memory_id: matrix[memory_id] for memory_id in requested_ids}
+
+        return score
+
+    def test_coverage_keeps_selected_candidate_out_of_own_source_baseline(self):
+        matrix = {
+            "a": (0.0, 1.0, 10.0),
+            "b": (1.0, 0.0, 4.0),
+            "c": (0.5, 6.0, 0.0),
+        }
+        eligibility = {
+            "a": (False, True, True),
+            "b": (True, False, True),
+            "c": (True, True, False),
+        }
+        selection = OracleCoverageScheduler().select(
+            matrix,
+            2,
+            available_ids=(),
+            next_interval_queries=("q0", "q1", "q2"),
+            distance_scorer=self.scorer(matrix),
+            eligibility_by_id=eligibility,
+        )
+        self.assertEqual(selection.memory_ids, ("b", "c"))
+        self.assertEqual(
+            selection.oracle_scores["c"]["newly_covered_query_count"], 1
+        )
+
+    def test_exact_retrieval_ignores_candidate_self_hit(self):
+        matrix = {"a": (0.0, 0.2), "b": (0.3, 0.0)}
+        eligibility = {"a": (False, True), "b": (True, False)}
+        selection = OracleExactRetrievalScheduler().select(
+            matrix,
+            1,
+            available_ids=(),
+            future_queries=("q0", "q1"),
+            distance_scorer=self.scorer(matrix),
+            top_k=1,
+            score_threshold=0.5,
+            eligibility_by_id=eligibility,
+        )
+        self.assertEqual(selection.memory_ids, ("a",))
+        self.assertAlmostEqual(
+            selection.oracle_scores["a"]["base_retrieval_value"], 0.3
+        )
+
+    def test_hit_quality_ignores_candidate_self_hit(self):
+        matrix = {"a": (0.0, 0.9), "b": (0.2, 0.0)}
+        eligibility = {"a": (False, True), "b": (True, False)}
+        selection = OracleHitQualityScheduler().select(
+            matrix,
+            1,
+            available_ids=(),
+            future_queries=("q0", "q1"),
+            distance_scorer=self.scorer(matrix),
+            top_k=1,
+            score_threshold=0.5,
+            alpha=1.0,
+            metric="ru",
+            eligibility_by_id=eligibility,
+        )
+        self.assertEqual(selection.memory_ids, ("b",))
+        self.assertEqual(selection.oracle_scores["b"]["hit_gain"], 1)
+
+    def test_controller_uses_observed_history_without_future_queries(self):
+        controller = OnlineConstructionController(
+            memory=FakeMemory(),
+            policy="historical_cross_task_coverage",
+            capacity=1,
+        )
+        rows = [result(0), result(1, reward=False)]
+        controller.record_observed_tasks(rows, interval_id=0)
+        controller.admit_results(rows, interval_id=0)
+
+        event = controller.construct(interval_id=0)
+
+        self.assertEqual(event["observed_history_count"], 2)
+        self.assertEqual(event["historical_query_count"], 2)
+        self.assertTrue(event["historical_cross_task_source_mask"])
+        self.assertEqual(len(event["selected_queue_ids"]), 1)
+
+    def test_activated_online_memory_remains_ineligible_for_own_source(self):
+        controller = OnlineConstructionController(
+            memory=FakeMemory(),
+            policy="historical_cross_task_exact_retrieval",
+            capacity=1,
+        )
+        rows = [result(0), result(1)]
+        controller.record_observed_tasks(rows, interval_id=0)
+        controller.admit_results(rows, interval_id=0)
+        controller.construct(interval_id=0)
+        controller.activate_staged(interval_id=1)
+        available = controller._available_queries()
+        _, eligibility = controller._historical_cross_task_context(
+            available_ids=available,
+            pending_ids=controller.queue.pending_ids,
+        )
+        constructed_id = next(iter(available))
+        source_index = controller._available_source_task_indices()[constructed_id]
+        history_order = list(controller.observed_tasks)
+        source_position = history_order.index(source_index)
+        self.assertFalse(eligibility[constructed_id][source_position])
 
 
 class QueueTests(unittest.TestCase):

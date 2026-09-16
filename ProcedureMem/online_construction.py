@@ -24,6 +24,9 @@ from ProcedureMem.cloud_scheduling import (
 
 
 ONLINE_POLICIES = (
+    "historical_cross_task_coverage",
+    "historical_cross_task_exact_retrieval",
+    "historical_cross_task_hit_quality",
     "oracle_hit_quality",
     "fifo",
     "fifo_shortest_first",
@@ -50,6 +53,15 @@ EXACT_RETRIEVAL_POLICIES = {
     "oracle_exact_retrieval_historical_utility_v2_topk",
 }
 FUTURE_WINDOW_POLICIES = EXACT_RETRIEVAL_POLICIES | {"oracle_hit_quality"}
+HISTORICAL_CROSS_TASK_POLICIES = {
+    "historical_cross_task_coverage",
+    "historical_cross_task_exact_retrieval",
+    "historical_cross_task_hit_quality",
+}
+HISTORICAL_CROSS_TASK_EXACT_POLICIES = {
+    "historical_cross_task_exact_retrieval",
+    "historical_cross_task_hit_quality",
+}
 HISTORICAL_UTILITY_POLICIES = {
     "oracle_exact_retrieval_historical_utility",
     "oracle_coverage_historical_utility_v2",
@@ -141,6 +153,17 @@ class OnlineTrajectoryCandidate:
     selected_count: int = 0
     last_selected_interval: int | None = None
     last_construction_result: str | None = None
+
+    def as_dict(self) -> dict[str, Any]:
+        return asdict(self)
+
+
+@dataclass(frozen=True)
+class ObservedTask:
+    task_id: str
+    task_index: int
+    query: str
+    interval_id: int
 
     def as_dict(self) -> dict[str, Any]:
         return asdict(self)
@@ -473,10 +496,11 @@ class OnlineConstructionController:
         self.queue_events: list[dict[str, Any]] = []
         self.construction_events: list[dict[str, Any]] = []
         self.trajectory_events: list[dict[str, Any]] = []
+        self.observed_tasks: dict[int, ObservedTask] = {}
         self.historical_memory_stats: dict[str, dict[str, int]] = {}
         self._arrival_order = 0
         self._register_available_memories()
-        if policy == "oracle_hit_quality":
+        if policy in {"oracle_hit_quality", "historical_cross_task_hit_quality"}:
             self.scheduler = OracleHitQualityScheduler()
         elif policy == "fifo":
             self.scheduler = FIFOScheduler()
@@ -486,7 +510,7 @@ class OnlineConstructionController:
             self.scheduler = OnlineRandomScheduler(seed=scheduler_seed)
         elif policy == "greedy_novelty":
             self.scheduler = GreedyNoveltyScheduler()
-        elif policy in COVERAGE_POLICIES:
+        elif policy in COVERAGE_POLICIES | {"historical_cross_task_coverage"}:
             self.scheduler = OracleCoverageScheduler()
         else:
             self.scheduler = OracleExactRetrievalScheduler()
@@ -521,6 +545,33 @@ class OnlineConstructionController:
                 counters["retrieval_count"] += 1
                 if bool(result.get("reward")):
                     counters["success_count"] += 1
+
+    def record_observed_tasks(
+        self, results: Sequence[Mapping[str, Any]], *, interval_id: int
+    ) -> list[int]:
+        """Record every completed task as causal historical demand."""
+        recorded: list[int] = []
+        for result in results:
+            task_index = int(result["task_index"])
+            query = str(result["query"]).strip()
+            if not query:
+                raise ValueError("Observed online task has no query")
+            task = ObservedTask(
+                task_id=str(result["task_id"]),
+                task_index=task_index,
+                query=query,
+                interval_id=interval_id,
+            )
+            existing = self.observed_tasks.get(task_index)
+            if existing is not None:
+                if existing != task:
+                    raise ValueError(
+                        f"Observed task index {task_index} changed across intervals"
+                    )
+                raise ValueError(f"Observed task index recorded twice: {task_index}")
+            self.observed_tasks[task_index] = task
+            recorded.append(task_index)
+        return recorded
 
     def activate_staged(self, *, interval_id: int) -> list[str]:
         if not self.staged_documents:
@@ -578,6 +629,63 @@ class OnlineConstructionController:
             )
         return queries
 
+    def _available_source_task_indices(self) -> dict[str, int | None]:
+        sources: dict[str, int | None] = {}
+        for index, document in enumerate(self.memory.documents):
+            memory_id = str(
+                document.metadata.get("memory_id") or f"available_{index:04d}"
+            )
+            source = document.metadata.get("source_task_index")
+            sources[memory_id] = int(source) if source is not None else None
+        return sources
+
+    def _historical_cross_task_context(
+        self,
+        *,
+        available_ids: Iterable[str],
+        pending_ids: Iterable[str],
+    ) -> tuple[tuple[str, ...], dict[str, tuple[bool, ...]]]:
+        history = list(self.observed_tasks.values())
+        if not history:
+            raise ValueError("Historical cross-task scheduling requires observed tasks")
+        history_indices = {task.task_index for task in history}
+        pending = list(pending_ids)
+        pending_sources = {
+            queue_id: self.queue.get(queue_id).task_index for queue_id in pending
+        }
+        missing_pending = sorted(
+            set(pending_sources.values()) - history_indices
+        )
+        if missing_pending:
+            raise ValueError(
+                "Pending candidate source tasks are absent from observed history: "
+                + ", ".join(str(value) for value in missing_pending[:5])
+            )
+        available_sources = self._available_source_task_indices()
+        available = list(available_ids)
+        if set(available_sources) != set(available):
+            raise ValueError("Available memory provenance does not match available IDs")
+        missing_available = sorted(
+            source
+            for source in available_sources.values()
+            if source is not None and source not in history_indices
+        )
+        if missing_available:
+            raise ValueError(
+                "Available online memory source tasks are absent from observed history: "
+                + ", ".join(str(value) for value in missing_available[:5])
+            )
+        sources = {**available_sources, **pending_sources}
+        eligibility = {
+            memory_id: tuple(
+                source_task_index is None
+                or source_task_index != task.task_index
+                for task in history
+            )
+            for memory_id, source_task_index in sources.items()
+        }
+        return tuple(task.query for task in history), eligibility
+
     def _exact_retrieval_config(self) -> tuple[int, float]:
         top_k = self.retrieval_top_k
         threshold = self.retrieval_score_threshold
@@ -633,6 +741,7 @@ class OnlineConstructionController:
             "greedy_novelty",
             *COVERAGE_POLICIES,
             *FUTURE_WINDOW_POLICIES,
+            *HISTORICAL_CROSS_TASK_POLICIES,
         }:
             return self.scheduler.select(pending_ids, self.capacity)
         available_queries = self._available_queries()
@@ -646,6 +755,64 @@ class OnlineConstructionController:
             )
         queries = {**available_queries, **pending_queries}
         embedder = getattr(self.memory, "cached_embedder", self.memory.embedding)
+        if self.policy in HISTORICAL_CROSS_TASK_POLICIES:
+            historical_queries, eligibility = self._historical_cross_task_context(
+                available_ids=available_queries,
+                pending_ids=pending_ids,
+            )
+            distances = _query_distance_matrix(
+                queries, historical_queries, embedder
+            )
+
+            def historical_distance_scorer(
+                _: Sequence[str], requested_ids: Iterable[str]
+            ) -> dict[str, tuple[float, ...]]:
+                requested = set(requested_ids)
+                unknown = requested - set(distances)
+                if unknown:
+                    raise ValueError(
+                        "Unknown historical cross-task IDs: "
+                        + ", ".join(sorted(unknown)[:5])
+                    )
+                return {
+                    item_id: distances[item_id]
+                    for item_id in queries
+                    if item_id in requested
+                }
+
+            if self.policy == "historical_cross_task_coverage":
+                return self.scheduler.select(
+                    pending_ids,
+                    self.capacity,
+                    available_ids=available_queries,
+                    next_interval_queries=historical_queries,
+                    distance_scorer=historical_distance_scorer,
+                    eligibility_by_id=eligibility,
+                )
+            top_k, threshold = self._exact_retrieval_config()
+            if self.policy == "historical_cross_task_hit_quality":
+                return self.scheduler.select(
+                    pending_ids,
+                    self.capacity,
+                    available_ids=available_queries,
+                    future_queries=historical_queries,
+                    distance_scorer=historical_distance_scorer,
+                    top_k=top_k,
+                    score_threshold=threshold,
+                    alpha=self.hit_quality_alpha,
+                    metric=self.hit_quality_metric,
+                    eligibility_by_id=eligibility,
+                )
+            return self.scheduler.select(
+                pending_ids,
+                self.capacity,
+                available_ids=available_queries,
+                future_queries=historical_queries,
+                distance_scorer=historical_distance_scorer,
+                top_k=top_k,
+                score_threshold=threshold,
+                eligibility_by_id=eligibility,
+            )
         if self.policy in COVERAGE_POLICIES:
             if next_interval_queries is None:
                 raise ValueError(
@@ -844,6 +1011,7 @@ class OnlineConstructionController:
                     "interval_id": interval_id,
                     "queue_id": queue_id,
                     "source_task_id": candidate.task_id,
+                    "source_task_index": candidate.task_index,
                     "source_steps": candidate.steps,
                     "selection_rank": rank,
                     "scheduler_score": score,
@@ -861,6 +1029,7 @@ class OnlineConstructionController:
                     "interval_id": interval_id,
                     "queue_id": queue_id,
                     "source_task_id": candidate.task_id,
+                    "source_task_index": candidate.task_index,
                     "source_steps": candidate.steps,
                     "selection_rank": rank,
                     "scheduler_score": score,
@@ -951,6 +1120,19 @@ class OnlineConstructionController:
             "selected_queue_ids": selected_ids,
             "scheduler_scores": selection.scheduler_scores,
             "oracle_scores": selection.oracle_scores,
+            "observed_history_count": (
+                len(self.observed_tasks)
+                if self.policy in HISTORICAL_CROSS_TASK_POLICIES
+                else None
+            ),
+            "historical_query_count": (
+                len(self.observed_tasks)
+                if self.policy in HISTORICAL_CROSS_TASK_POLICIES
+                else None
+            ),
+            "historical_cross_task_source_mask": (
+                self.policy in HISTORICAL_CROSS_TASK_POLICIES
+            ),
             "oracle_next_interval_query_count": (
                 len([query for query in next_interval_queries if query.strip()])
                 if self.policy in COVERAGE_POLICIES and next_interval_queries
@@ -978,12 +1160,14 @@ class OnlineConstructionController:
             ),
             "oracle_retrieval_top_k": (
                 self._exact_retrieval_config()[0]
-                if self.policy in FUTURE_WINDOW_POLICIES
+                if self.policy
+                in FUTURE_WINDOW_POLICIES | HISTORICAL_CROSS_TASK_EXACT_POLICIES
                 else None
             ),
             "oracle_retrieval_threshold": (
                 self._exact_retrieval_config()[1]
-                if self.policy in FUTURE_WINDOW_POLICIES
+                if self.policy
+                in FUTURE_WINDOW_POLICIES | HISTORICAL_CROSS_TASK_EXACT_POLICIES
                 else None
             ),
             "queue_length_after_construction": len(self.queue),
@@ -1009,6 +1193,19 @@ class OnlineConstructionController:
             "pending_queue_ids_after_construction": ids,
             "construction_results": [],
             "final_interval_no_construction": True,
+            "observed_history_count": (
+                len(self.observed_tasks)
+                if self.policy in HISTORICAL_CROSS_TASK_POLICIES
+                else None
+            ),
+            "historical_query_count": (
+                len(self.observed_tasks)
+                if self.policy in HISTORICAL_CROSS_TASK_POLICIES
+                else None
+            ),
+            "historical_cross_task_source_mask": (
+                self.policy in HISTORICAL_CROSS_TASK_POLICIES
+            ),
             "oracle_requested_lookahead_horizon": (
                 requested_lookahead_horizon
                 if self.policy in FUTURE_WINDOW_POLICIES
@@ -1025,12 +1222,14 @@ class OnlineConstructionController:
             ),
             "oracle_retrieval_top_k": (
                 self._exact_retrieval_config()[0]
-                if self.policy in FUTURE_WINDOW_POLICIES
+                if self.policy
+                in FUTURE_WINDOW_POLICIES | HISTORICAL_CROSS_TASK_EXACT_POLICIES
                 else None
             ),
             "oracle_retrieval_threshold": (
                 self._exact_retrieval_config()[1]
-                if self.policy in FUTURE_WINDOW_POLICIES
+                if self.policy
+                in FUTURE_WINDOW_POLICIES | HISTORICAL_CROSS_TASK_EXACT_POLICIES
                 else None
             ),
         }

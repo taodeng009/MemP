@@ -71,6 +71,8 @@ from ProcedureMem.online_construction import (
     HISTORICAL_UTILITY_TOP_K,
     HISTORICAL_UTILITY_TOPK_POLICIES,
     HISTORICAL_UTILITY_V2_POLICIES,
+    HISTORICAL_CROSS_TASK_EXACT_POLICIES,
+    HISTORICAL_CROSS_TASK_POLICIES,
     ONLINE_POLICIES,
     ORACLE_RETRIEVAL_THRESHOLD,
     OnlineConstructionController,
@@ -210,7 +212,10 @@ def _validate_args(parser: argparse.ArgumentParser, args: argparse.Namespace) ->
         parser.error("--score-threshold must be non-negative")
     if not 0 <= args.hit_quality_alpha <= 1:
         parser.error("--hit-quality-alpha must be finite and in [0, 1]")
-    if args.schedule_policy == "oracle_hit_quality":
+    if args.schedule_policy in {
+        "oracle_hit_quality",
+        "historical_cross_task_hit_quality",
+    }:
         # Online query retrieval currently uses Memory.retrieve's fixed 0.5 cutoff.
         if args.oracle_retrieval_threshold != 0.5 or args.score_threshold not in (None, 0.5):
             parser.error("Hit quality must match actual online query retrieval threshold 0.5")
@@ -551,6 +556,11 @@ def _online_interval_metrics(
                 "selected_queue_ids": event.get("selected_queue_ids", []),
                 "scheduler_scores": event.get("scheduler_scores"),
                 "oracle_scores": event.get("oracle_scores"),
+                "observed_history_count": event.get("observed_history_count"),
+                "historical_query_count": event.get("historical_query_count"),
+                "historical_cross_task_source_mask": event.get(
+                    "historical_cross_task_source_mask"
+                ),
                 "oracle_next_interval_query_count": event.get(
                     "oracle_next_interval_query_count"
                 ),
@@ -877,8 +887,18 @@ def main(argv: Sequence[str] | None = None) -> int:
             scheduler = OracleSumScheduler()
 
     parameters = {
-        "hit_quality_alpha": args.hit_quality_alpha if args.schedule_policy == "oracle_hit_quality" else None,
-        "hit_quality_metric": args.hit_quality_metric if args.schedule_policy == "oracle_hit_quality" else None,
+        "hit_quality_alpha": (
+            args.hit_quality_alpha
+            if args.schedule_policy
+            in {"oracle_hit_quality", "historical_cross_task_hit_quality"}
+            else None
+        ),
+        "hit_quality_metric": (
+            args.hit_quality_metric
+            if args.schedule_policy
+            in {"oracle_hit_quality", "historical_cross_task_hit_quality"}
+            else None
+        ),
         "model": settings.model_name,
         "routed_model": routed_model,
         "agent_api_base_url": settings.api_base_url,
@@ -992,6 +1012,21 @@ def main(argv: Sequence[str] | None = None) -> int:
         "manifest": str(manifest_path.resolve()),
         "manifest_sha256": manifest_sha256(manifest),
         "schedule_policy": args.schedule_policy,
+        "demand_query_source": (
+            "observed_history"
+            if args.schedule_policy in HISTORICAL_CROSS_TASK_POLICIES
+            else "future_manifest"
+            if args.schedule_policy in {*COVERAGE_POLICIES, *FUTURE_WINDOW_POLICIES}
+            else None
+        ),
+        "cross_task_source_exclusion": (
+            args.schedule_policy in HISTORICAL_CROSS_TASK_POLICIES
+        ),
+        "history_scope": (
+            "all_observed_tasks"
+            if args.schedule_policy in HISTORICAL_CROSS_TASK_POLICIES
+            else None
+        ),
         "interval_size": args.interval_size,
         "construction_capacity": args.construction_capacity,
         "oracle_objective": (
@@ -1036,13 +1071,15 @@ def main(argv: Sequence[str] | None = None) -> int:
         "oracle_retrieval_top_k": (
             online_controller.retrieval_top_k
             if args.condition == "online_construction"
-            and args.schedule_policy in FUTURE_WINDOW_POLICIES
+            and args.schedule_policy
+            in FUTURE_WINDOW_POLICIES | HISTORICAL_CROSS_TASK_EXACT_POLICIES
             else None
         ),
         "oracle_retrieval_threshold": (
             online_controller.retrieval_score_threshold
             if args.condition == "online_construction"
-            and args.schedule_policy in FUTURE_WINDOW_POLICIES
+            and args.schedule_policy
+            in FUTURE_WINDOW_POLICIES | HISTORICAL_CROSS_TASK_EXACT_POLICIES
             else None
         ),
         "historical_utility_min_count": (
@@ -1157,6 +1194,16 @@ def main(argv: Sequence[str] | None = None) -> int:
             memory.score_threshold if args.condition == "cloud_scheduled" else None
         ),
         "oracle_score_type": (
+            "historical_cross_task_marginal_coverage"
+            if args.condition == "online_construction"
+            and args.schedule_policy == "historical_cross_task_coverage"
+            else "historical_cross_task_exact_retrieval"
+            if args.condition == "online_construction"
+            and args.schedule_policy == "historical_cross_task_exact_retrieval"
+            else "historical_cross_task_hit_quality"
+            if args.condition == "online_construction"
+            and args.schedule_policy == "historical_cross_task_hit_quality"
+            else
             "faiss_l2_distance_sum"
             if args.condition == "cloud_scheduled"
             and args.schedule_policy in {"oracle_high", "oracle_sum"}
@@ -1189,7 +1236,11 @@ def main(argv: Sequence[str] | None = None) -> int:
             else True
             if args.condition == "online_construction"
             and args.schedule_policy
-            in {*COVERAGE_POLICIES, *FUTURE_WINDOW_POLICIES}
+            in {
+                *COVERAGE_POLICIES,
+                *FUTURE_WINDOW_POLICIES,
+                *HISTORICAL_CROSS_TASK_POLICIES,
+            }
             else None
         ),
         "scheduler_score_type": (
@@ -1465,6 +1516,10 @@ def main(argv: Sequence[str] | None = None) -> int:
                 for result in results
                 if int(result["interval_id"]) == int(interval_id)
             ]
+            online_controller.record_observed_tasks(
+                interval_results,
+                interval_id=interval_id,
+            )
             online_controller.record_retrieval_outcomes(interval_results)
             arrived_ids = online_controller.admit_results(
                 interval_results,
@@ -1686,6 +1741,11 @@ def main(argv: Sequence[str] | None = None) -> int:
             condition_dir / "construction_events.jsonl",
             online_controller.construction_events,
         )
+        if args.schedule_policy in HISTORICAL_CROSS_TASK_POLICIES:
+            _write_jsonl(
+                condition_dir / "observed_tasks.jsonl",
+                [task.as_dict() for task in online_controller.observed_tasks.values()],
+            )
         constructed_memory_ids = {
             event["constructed_memory_id"]
             for event in online_controller.construction_events
@@ -1737,6 +1797,12 @@ def main(argv: Sequence[str] | None = None) -> int:
             ],
             "construction_method": "direct",
             "arrival_policy": "success_only",
+            "demand_query_source": parameters["demand_query_source"],
+            "cross_task_source_exclusion": parameters[
+                "cross_task_source_exclusion"
+            ],
+            "history_scope": parameters["history_scope"],
+            "observed_history_count": len(online_controller.observed_tasks),
             "memory_build_model": memory.build_model,
             "memory_build_temperature": memory.build_temperature,
             "memory_build_seed": memory.build_seed,

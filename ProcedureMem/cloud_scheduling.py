@@ -29,6 +29,37 @@ class ScheduleSelection:
     scheduler_scores: dict[str, dict[str, Any]] | None = None
 
 
+def _query_eligibility(
+    memory_ids: Iterable[str],
+    query_count: int,
+    eligibility_by_id: Mapping[str, Sequence[bool]] | None,
+) -> dict[str, tuple[bool, ...]]:
+    """Return a validated memory-to-query eligibility mask."""
+    ids = set(memory_ids)
+    if eligibility_by_id is None:
+        return {memory_id: (True,) * query_count for memory_id in ids}
+    if set(eligibility_by_id) != ids:
+        missing = sorted(ids - set(eligibility_by_id))
+        unknown = sorted(set(eligibility_by_id) - ids)
+        raise ValueError(
+            "Eligibility mask returned the wrong memories: "
+            f"missing={missing[:5]}, unknown={unknown[:5]}"
+        )
+    masks = {
+        memory_id: tuple(bool(value) for value in eligibility_by_id[memory_id])
+        for memory_id in ids
+    }
+    wrong_lengths = sorted(
+        memory_id for memory_id, mask in masks.items() if len(mask) != query_count
+    )
+    if wrong_lengths:
+        raise ValueError(
+            "Eligibility mask returned the wrong query count for: "
+            + ", ".join(wrong_lengths[:5])
+        )
+    return masks
+
+
 def load_cached_embedding(memory_dir: str | Path) -> Any:
     """Create the repository's embedding client with its existing disk cache."""
     from langchain.embeddings import CacheBackedEmbeddings
@@ -553,6 +584,7 @@ class OracleCoverageScheduler:
         historical_utility_alpha: float | None = None,
         historical_utility_top_k: int | None = None,
         gain_normalization_epsilon: float = 1e-8,
+        eligibility_by_id: Mapping[str, Sequence[bool]] | None = None,
     ) -> ScheduleSelection:
         if capacity < 1:
             raise ValueError("Construction capacity must be at least 1")
@@ -616,24 +648,44 @@ class OracleCoverageScheduler:
                 "Oracle distance scorer returned the wrong query count for: "
                 + ", ".join(wrong_lengths[:5])
             )
+        eligibility = _query_eligibility(
+            scored_ids, query_count, eligibility_by_id
+        )
 
         selected: list[str] = []
         scores: dict[str, dict[str, Any]] = {}
         if available:
             best_distances = [
-                min(distance_matrix[memory_id][query_index] for memory_id in available)
+                min(
+                    (
+                        distance_matrix[memory_id][query_index]
+                        for memory_id in available
+                        if eligibility[memory_id][query_index]
+                    ),
+                    default=float("inf"),
+                )
                 for query_index in range(query_count)
             ]
         else:
             first_id = min(
                 pending,
                 key=lambda memory_id: (
-                    sum(distance_matrix[memory_id]),
+                    sum(
+                        distance_matrix[memory_id][query_index]
+                        for query_index in range(query_count)
+                        if eligibility[memory_id][query_index]
+                    ),
                     memory_id,
                 ),
             )
             selected.append(first_id)
-            first_distance_sum = float(sum(distance_matrix[first_id]))
+            first_distance_sum = float(
+                sum(
+                    distance_matrix[first_id][query_index]
+                    for query_index in range(query_count)
+                    if eligibility[first_id][query_index]
+                )
+            )
             scores[first_id] = {
                 "value": first_distance_sum,
                 "score_type": "faiss_l2_distance_sum",
@@ -660,11 +712,24 @@ class OracleCoverageScheduler:
                             "historical_effective_reference_count": 0,
                         }
                     )
-            best_distances = list(distance_matrix[first_id])
+            best_distances = [
+                distance_matrix[first_id][query_index]
+                if eligibility[first_id][query_index]
+                else float("inf")
+                for query_index in range(query_count)
+            ]
 
         target_count = min(capacity, len(pending))
         while len(selected) < target_count:
             remaining = pending - set(selected)
+            newly_covered = {
+                memory_id: sum(
+                    eligibility[memory_id][query_index]
+                    and not np.isfinite(best_distances[query_index])
+                    for query_index in range(query_count)
+                )
+                for memory_id in remaining
+            }
             marginal_gains = {
                 memory_id: float(
                     sum(
@@ -674,6 +739,8 @@ class OracleCoverageScheduler:
                             - distance_matrix[memory_id][query_index],
                         )
                         for query_index in range(query_count)
+                        if eligibility[memory_id][query_index]
+                        and np.isfinite(best_distances[query_index])
                     )
                 )
                 for memory_id in remaining
@@ -695,7 +762,11 @@ class OracleCoverageScheduler:
                 }
             next_id = min(
                 remaining,
-                key=lambda memory_id: (-adjusted_scores[memory_id], memory_id),
+                key=lambda memory_id: (
+                    -newly_covered[memory_id],
+                    -adjusted_scores[memory_id],
+                    memory_id,
+                ),
             )
             selected.append(next_id)
             scores[next_id] = {
@@ -707,6 +778,7 @@ class OracleCoverageScheduler:
                 ),
                 "higher_is_better": True,
                 "selection_rank": len(selected),
+                "newly_covered_query_count": newly_covered[next_id],
             }
             if historical_utility_alpha is not None:
                 scores[next_id].update(
@@ -733,6 +805,8 @@ class OracleCoverageScheduler:
                     )
             best_distances = [
                 min(best_distance, distance_matrix[next_id][query_index])
+                if eligibility[next_id][query_index]
+                else best_distance
                 for query_index, best_distance in enumerate(best_distances)
             ]
 
@@ -776,6 +850,7 @@ class OracleExactRetrievalScheduler:
         historical_utility_alpha: float | None = None,
         historical_utility_top_k: int | None = None,
         gain_normalization_epsilon: float = 1e-8,
+        eligibility_by_id: Mapping[str, Sequence[bool]] | None = None,
     ) -> ScheduleSelection:
         if capacity < 1:
             raise ValueError("Construction capacity must be at least 1")
@@ -848,12 +923,16 @@ class OracleExactRetrievalScheduler:
                 "Oracle distance scorer returned the wrong query count for: "
                 + ", ".join(wrong_lengths[:5])
             )
+        eligibility = _query_eligibility(
+            scored_ids, len(queries), eligibility_by_id
+        )
 
         current_top = [
             self._top_distances(
                 (
                     distance_matrix[memory_id][query_index]
                     for memory_id in available
+                    if eligibility[memory_id][query_index]
                 ),
                 top_k=top_k,
             )
@@ -874,7 +953,14 @@ class OracleExactRetrievalScheduler:
             for memory_id in pending - set(selected):
                 updated = [
                     self._top_distances(
-                        (*current_top[query_index], distance_matrix[memory_id][query_index]),
+                        (
+                            *current_top[query_index],
+                            *(
+                                (distance_matrix[memory_id][query_index],)
+                                if eligibility[memory_id][query_index]
+                                else ()
+                            ),
+                        ),
                         top_k=top_k,
                     )
                     for query_index in range(len(queries))
@@ -942,6 +1028,7 @@ class OracleExactRetrievalScheduler:
                 "retrieval_top_k": top_k,
                 "retrieval_threshold": score_threshold,
                 "future_query_count": len(queries),
+                "eligible_query_count": sum(eligibility[next_id]),
             }
             if historical_utility_alpha is not None:
                 scores[next_id].update(
@@ -984,6 +1071,7 @@ class OracleHitQualityScheduler(OracleExactRetrievalScheduler):
         score_threshold: float,
         alpha: float = 0.5,
         metric: str = "ru",
+        eligibility_by_id: Mapping[str, Sequence[bool]] | None = None,
     ) -> ScheduleSelection:
         if not np.isfinite(alpha) or not 0 <= alpha <= 1:
             raise ValueError("Hit quality alpha must be finite and in [0, 1]")
@@ -1008,7 +1096,13 @@ class OracleHitQualityScheduler(OracleExactRetrievalScheduler):
             for v in matrix.values()
         ):
             raise ValueError("Invalid hit quality distance matrix")
-        current = [self._top_distances((matrix[m][i] for m in available), top_k=top_k)
+        eligibility = _query_eligibility(
+            pending | available, len(queries), eligibility_by_id
+        )
+        current = [self._top_distances(
+                       (matrix[m][i] for m in available if eligibility[m][i]),
+                       top_k=top_k,
+                   )
                    for i in range(len(queries))]
         selected, scores = [], {}
         target = min(capacity, len(pending))
@@ -1019,22 +1113,53 @@ class OracleHitQualityScheduler(OracleExactRetrievalScheduler):
             updated, hits, quality = {}, {}, {}
             bootstrap = metric == "bd" and not available and not selected
             for m in remaining:
-                updated[m] = [self._top_distances((*current[i], matrix[m][i]), top_k=top_k)
+                updated[m] = [self._top_distances(
+                                  (
+                                      *current[i],
+                                      *((matrix[m][i],) if eligibility[m][i] else ()),
+                                  ),
+                                  top_k=top_k,
+                              )
                               for i in range(len(queries))]
-                hits[m] = sum(b > score_threshold and d <= score_threshold
-                              for b, d in zip(best, matrix[m]))
+                hits[m] = sum(
+                    eligibility[m][i]
+                    and best[i] > score_threshold
+                    and matrix[m][i] <= score_threshold
+                    for i in range(len(queries))
+                )
                 if not bootstrap:
-                    quality[m] = (sum(max(0.0, b-d) for b, d in zip(best, matrix[m]))
+                    quality[m] = (sum(
+                                      max(0.0, best[i] - matrix[m][i])
+                                      for i in range(len(queries))
+                                      if eligibility[m][i] and np.isfinite(best[i])
+                                  )
                                   if metric == "bd" else max(0.0, sum(
                                       self._utility(ds, threshold=score_threshold)
                                       for ds in updated[m]) - before))
             if bootstrap:
-                chosen = min(remaining, key=lambda m: (sum(matrix[m]), m))
+                chosen = min(
+                    remaining,
+                    key=lambda m: (
+                        sum(
+                            matrix[m][i]
+                            for i in range(len(queries))
+                            if eligibility[m][i]
+                        ),
+                        m,
+                    ),
+                )
+                bootstrap_sum = float(
+                    sum(
+                        matrix[chosen][i]
+                        for i in range(len(queries))
+                        if eligibility[chosen][i]
+                    )
+                )
                 detail = dict(quality_gain=None, hit_gain_max=None, quality_gain_max=None,
                               normalized_hit_gain=None, normalized_quality_gain=None,
-                              priority=None, value=float(sum(matrix[chosen])),
+                              priority=None, value=bootstrap_sum,
                               higher_is_better=False,
-                              bootstrap_distance_sum=float(sum(matrix[chosen])))
+                              bootstrap_distance_sum=bootstrap_sum)
             else:
                 hm, qm = max(hits.values()), max(quality.values())
                 hn = {m: hits[m]/(hm+1e-8) for m in remaining}
@@ -1051,7 +1176,8 @@ class OracleHitQualityScheduler(OracleExactRetrievalScheduler):
             current = updated[chosen]
             scores[chosen] = dict(detail, hit_gain=hits[chosen], selection_rank=len(selected),
                                   coverage_bootstrap=bootstrap, hit_quality_alpha=alpha,
-                                  hit_quality_metric=metric, score_type="hit_quality_"+metric)
+                                  hit_quality_metric=metric, score_type="hit_quality_"+metric,
+                                  eligible_query_count=sum(eligibility[chosen]))
         return ScheduleSelection(memory_ids=tuple(selected), oracle_scores=scores)
 
 
