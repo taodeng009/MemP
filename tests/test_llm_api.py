@@ -41,7 +41,14 @@ class MemoryBuildGenerationSettingsTests(unittest.TestCase):
 
     def test_request_includes_resolved_temperature_and_seed(self):
         response = SimpleNamespace(
-            choices=[SimpleNamespace(message=SimpleNamespace(content="workflow"))]
+            choices=[SimpleNamespace(message=SimpleNamespace(content="workflow"))],
+            usage=SimpleNamespace(
+                prompt_tokens=100,
+                completion_tokens=20,
+                total_tokens=120,
+            ),
+            model="builder",
+            id="request-1",
         )
         client = SimpleNamespace(
             chat=SimpleNamespace(
@@ -66,7 +73,11 @@ class MemoryBuildGenerationSettingsTests(unittest.TestCase):
                 top_k=1,
             )
 
-        self.assertEqual(result, "workflow")
+        self.assertEqual(result.content, "workflow")
+        self.assertEqual(result.usage.prompt_tokens, 100)
+        self.assertEqual(result.usage.completion_tokens, 20)
+        self.assertEqual(result.usage.total_tokens, 120)
+        self.assertEqual(result.request_id, "request-1")
         self.assertEqual(captured["temperature"], 0.0)
         self.assertEqual(captured["seed"], 42)
         self.assertEqual(captured["extra_body"]["top_k"], 1)

@@ -42,6 +42,7 @@ from ProcedureMem.cloud_scheduling import (
 )
 from ProcedureMem.eval_alfworld import _initial_observation, _make_llm, _task_name
 from ProcedureMem.Alfworld.prompts import alfworld_system_prompt
+from ProcedureMem.llm_usage import append_jsonl, task_usage_records
 from ProcedureMem.runtime_config import (
     DEFAULT_ALFWORLD_CONFIG,
     DEFAULT_EXAMPLES_PATH,
@@ -501,7 +502,23 @@ def _write_condition_results(directory: Path, results: Sequence[Mapping[str, Any
     if directory.exists() and any(directory.iterdir()):
         raise FileExistsError(f"Condition output already exists: {directory}")
     directory.mkdir(parents=True, exist_ok=True)
-    write_jsonl(directory / "results.jsonl", results)
+    persisted_results = []
+    usage_records = []
+    for result in results:
+        persisted = dict(result)
+        calls = persisted.pop("llm_calls")
+        aggregate = persisted.pop("token_usage")
+        usage_records.extend(
+            task_usage_records(
+                task_index=int(persisted["task_index"]),
+                task_id=str(persisted["task_id"]),
+                calls=calls,
+                aggregate=aggregate,
+            )
+        )
+        persisted_results.append(persisted)
+    write_jsonl(directory / "results.jsonl", persisted_results)
+    append_jsonl(directory / "token_usage.jsonl", usage_records)
     success_count = sum(bool(row["reward"]) for row in results)
     write_json(
         directory / "summary.json",

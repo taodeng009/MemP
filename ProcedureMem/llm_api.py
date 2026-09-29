@@ -4,6 +4,7 @@ import math
 from retry import retry
 import os
 from ProcedureMem.runtime_config import load_environment
+from ProcedureMem.llm_usage import LLMCallResult, ParsedLLMCallResult, extract_usage
 
 
 load_environment()
@@ -146,9 +147,18 @@ def get_response(
         extra_body["enable_thinking"] = enable_thinking
     request["extra_body"] = extra_body
     response = client.chat.completions.create(**request)
-    if not hasattr(response, "error"):
-        return response.choices[0].message.content
-    return response.error.message
+    error = getattr(response, "error", None)
+    if error is not None:
+        raise RuntimeError(getattr(error, "message", str(error)))
+    content = response.choices[0].message.content
+    if content is None:
+        raise RuntimeError("Memory builder returned an empty response")
+    return LLMCallResult(
+        content=content,
+        usage=extract_usage(response),
+        model=getattr(response, "model", None) or request["model"],
+        request_id=getattr(response, "id", None),
+    )
 
 @retry(tries=5, delay=5, backoff=2, jitter=(1, 3))
 def get_llm_response(
@@ -161,7 +171,7 @@ def get_llm_response(
     seed=None,
     top_k=None,
 ):
-    ans = get_response(
+    result = get_response(
         messages,
         model=model,
         api_key=api_key,
@@ -171,11 +181,11 @@ def get_llm_response(
         top_k=top_k,
     )
     if is_string:
-        return ans
+        value = result.content
     else:
-        cleaned_text = ans.strip("`json\n").strip("`\n").strip("```\n")
-        ans = json.loads(cleaned_text)
-        return ans
+        cleaned_text = result.content.strip("`json\n").strip("`\n").strip("```\n")
+        value = json.loads(cleaned_text)
+    return ParsedLLMCallResult(value=value, call=result)
 
 from langchain_openai import OpenAIEmbeddings
 

@@ -8,6 +8,20 @@ from ProcedureMem.alfworld_agent import (
     resolve_litellm_model,
     run_alfworld_batch,
 )
+from ProcedureMem.llm_usage import LLMCallResult, LLMUsage
+
+
+def llm_result(content, *, prompt_tokens=10, completion_tokens=2):
+    return LLMCallResult(
+        content=content,
+        usage=LLMUsage(
+            prompt_tokens=prompt_tokens,
+            completion_tokens=completion_tokens,
+            total_tokens=prompt_tokens + completion_tokens,
+        ),
+        model="fake-model",
+        request_id="fake-request",
+    )
 
 
 EXAMPLES_PATH = (
@@ -103,7 +117,7 @@ class AlfworldBatchRunnerTests(unittest.TestCase):
             observations=["task with retrieved workflow"],
             trajectory_observations=["clean task observation"],
             names=["task"],
-            llm_fn=lambda _: "Thought: act\nAction: go to table 1",
+            llm_fn=lambda _: llm_result("Thought: act\nAction: go to table 1"),
             system_prompt="system",
             few_shot=False,
         )
@@ -120,10 +134,10 @@ class AlfworldBatchRunnerTests(unittest.TestCase):
 
         def llm(messages):
             if "first task" in messages[1]["content"]:
-                return "Thought: finish first\nAction: go to table 1"
+                return llm_result("Thought: finish first\nAction: go to table 1")
             if len([message for message in messages if message["role"] == "assistant"]) == 0:
-                return "Thought: start second\nAction: go to counter 1"
-            return "Thought: finish second\nAction: move apple 1 to table 1"
+                return llm_result("Thought: start second\nAction: go to counter 1")
+            return llm_result("Thought: finish second\nAction: move apple 1 to table 1")
 
         results = run_alfworld_batch(
             env=env,
@@ -141,6 +155,14 @@ class AlfworldBatchRunnerTests(unittest.TestCase):
         self.assertEqual(results[1]["termination_reason"], "success")
         self.assertEqual(results[1]["steps"], 2)
         self.assertEqual(len(results), 2)
+        self.assertEqual(len(results[0]["llm_calls"]), 1)
+        self.assertEqual(len(results[1]["llm_calls"]), 2)
+        self.assertEqual(results[0]["llm_calls"][0]["call_index"], 1)
+        self.assertEqual(
+            [call["step"] for call in results[1]["llm_calls"]], [1, 2]
+        )
+        self.assertEqual(results[0]["token_usage"]["total_tokens"], 12)
+        self.assertEqual(results[1]["token_usage"]["total_tokens"], 24)
 
     def test_llm_failure_is_isolated_from_another_task(self):
         env = ImmediateSuccessEnv()
@@ -148,7 +170,7 @@ class AlfworldBatchRunnerTests(unittest.TestCase):
         def llm(messages):
             if "bad task" in messages[1]["content"]:
                 raise RuntimeError("API retries exhausted")
-            return "Thought: proceed\nAction: go to table 1"
+            return llm_result("Thought: proceed\nAction: go to table 1")
 
         results = run_alfworld_batch(
             env=env,
@@ -179,7 +201,7 @@ class AlfworldBatchRunnerTests(unittest.TestCase):
             env=env,
             observations=["task"],
             names=["task"],
-            llm_fn=lambda _: "Thought: uncertain",
+            llm_fn=lambda _: llm_result("Thought: uncertain"),
             system_prompt="system",
             few_shot=False,
             max_steps=3,
@@ -205,8 +227,8 @@ class AlfworldBatchRunnerTests(unittest.TestCase):
 
         def llm(messages):
             if any("Nothing happened" in message["content"] for message in messages):
-                return "Thought: continue\nAction: go to table 1"
-            return "Thought: finished\nAction: task completed"
+                return llm_result("Thought: continue\nAction: go to table 1")
+            return llm_result("Thought: finished\nAction: task completed")
 
         results = run_alfworld_batch(
             env=env,
@@ -233,7 +255,7 @@ class AlfworldBatchRunnerTests(unittest.TestCase):
             env=NeverDoneEnv(),
             observations=["task"],
             names=["task"],
-            llm_fn=lambda _: "Action: go to table 1",
+            llm_fn=lambda _: llm_result("Action: go to table 1"),
             system_prompt="system",
             few_shot=False,
             max_steps=2,
@@ -251,7 +273,7 @@ class AlfworldBatchRunnerTests(unittest.TestCase):
             env=BrokenEnv(),
             observations=["first", "second"],
             names=["first", "second"],
-            llm_fn=lambda _: "Action: go to table 1",
+            llm_fn=lambda _: llm_result("Action: go to table 1"),
             system_prompt="system",
             few_shot=False,
         )

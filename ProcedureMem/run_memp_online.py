@@ -13,6 +13,12 @@ from litellm import completion
 from alfworld.agents.environment import get_environment
 from ProcedureMem.Alfworld.prompts import alfworld_system_prompt
 from ProcedureMem.alfworld_agent import resolve_litellm_model, run_alfworld_batch
+from ProcedureMem.llm_usage import (
+    LLMCallResult,
+    append_jsonl,
+    extract_usage,
+    task_usage_records,
+)
 from ProcedureMem.memory import Memory
 import argparse
 
@@ -42,7 +48,12 @@ def llm(prompt,stop=None, model=None):
         request_kwargs["api_base"] = api_base
     response = completion(**request_kwargs)
     if response.choices[0].message.content is not None:
-        return response.choices[0].message.content
+        return LLMCallResult(
+            content=response.choices[0].message.content,
+            usage=extract_usage(response),
+            model=getattr(response, "model", None) or model_name,
+            request_id=getattr(response, "id", None),
+        )
     raise RuntimeError("LLM returned an empty response")
 
 
@@ -140,6 +151,16 @@ def main(args):
         
 
         for i, result in enumerate(batch_results):
+            task_index = idx * env.batch_size + i
+            append_jsonl(
+                output_path / "token_usage.jsonl",
+                task_usage_records(
+                    task_index=task_index,
+                    task_id=result["name"],
+                    calls=result.pop("llm_calls"),
+                    aggregate=result.pop("token_usage"),
+                ),
+            )
             with open(output_path / f'idx_{idx*env.batch_size+i}.json', 'w', encoding='utf-8') as f:
                 json.dump(result, f, indent=4, ensure_ascii=False)
 

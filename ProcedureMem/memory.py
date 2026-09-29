@@ -2,6 +2,8 @@ import json
 import os
 import random
 import time
+from dataclasses import dataclass
+from pathlib import Path
 import numpy as np
 from tqdm import tqdm
 from langchain_community.vectorstores import FAISS
@@ -33,6 +35,24 @@ from ProcedureMem.memory_utils import (
 )
 from ProcedureMem.memory_adjust import adjust_memory
 from ProcedureMem.reranker import OpenMemReranker, format_workflow_candidate
+from ProcedureMem.llm_usage import (
+    LLMCallResult,
+    append_jsonl,
+    memory_usage_records,
+)
+
+
+@dataclass(frozen=True)
+class MemoryBuildResult:
+    workflow: str
+    call: LLMCallResult
+
+
+@dataclass(frozen=True)
+class MemoryDocumentBuildResult:
+    document: Document | None
+    call: LLMCallResult | None
+    source_index: int | None
 
 class Memory:
     def __init__(self, **kwargs):
@@ -95,6 +115,9 @@ class Memory:
         self.facts_cache_path =  self.cache_dir + "/facts_embedding_cache.pkl"
         self.documents_path = self.memory_dir + "/" + self.build_policy + "/documents.json"
         self.manifest_path = self.memory_dir + "/" + self.build_policy + "/manifest.json"
+        self.memory_usage_path = (
+            Path(self.memory_dir) / self.build_policy / "memory_token_usage.jsonl"
+        )
         self.prompt_spec = get_prompt_spec(self.build_policy)
         self.documents = []
         self.vector_store = None
@@ -192,7 +215,7 @@ class Memory:
         self.save_documents()
         self.rebuild_index()
 
-    def process_trajectory_item(self, d):
+    def _process_trajectory_item_with_usage(self, d, source_index=None):
         """
         Process a single trajectory item.
         This function includes logic for checking existence, building workflow, and appending new documents.
@@ -206,7 +229,7 @@ class Memory:
         if memory_id is not None:
             if any(doc.metadata.get("memory_id") == memory_id for doc in self.documents):
                 print(f"[INFO] Memory ID '{memory_id}' already exists. Skipping...")
-                return None
+                return MemoryDocumentBuildResult(None, None, source_index)
         elif any(
             doc.metadata.get("query") == query
             and doc.metadata.get("build_policy") == self.build_policy
@@ -214,10 +237,16 @@ class Memory:
             for doc in self.documents
         ):
             print(f"[INFO] Query '{query}' with build policy '{self.build_policy}' already exists. Skipping...")
-            return None
+            return MemoryDocumentBuildResult(None, None, source_index)
 
         # Build workflow
-        workflow = self.build(query, trajectory)
+        call = None
+        if self.build_policy == "direct":
+            build_result = self.build_with_usage(query, trajectory)
+            workflow = build_result.workflow
+            call = build_result.call
+        else:
+            workflow = self.build(query, trajectory)
 
         # Create Document
         extra_metadata = dict(d.get("metadata") or {})
@@ -240,11 +269,66 @@ class Memory:
         if memory_id is not None:
             doc.metadata["memory_id"] = str(memory_id)
 
-        return doc
+        return MemoryDocumentBuildResult(doc, call, source_index)
+
+    def process_trajectory_item(self, d):
+        """Build a workflow document without persisting token records."""
+        return self._process_trajectory_item_with_usage(d).document
 
     def build_document(self, item):
         """Build one workflow Document without mutating or rebuilding memory."""
-        return self.process_trajectory_item(item)
+        source_index = (item.get("metadata") or {}).get("source_task_index")
+        try:
+            result = self._process_trajectory_item_with_usage(item, source_index)
+        except Exception:
+            self._record_memory_failure(
+                source_index=source_index,
+                memory_id=item.get("memory_id"),
+            )
+            raise
+        if result.call is not None:
+            self._record_memory_usage(
+                result,
+                memory_id=item.get("memory_id"),
+            )
+        return result.document
+
+    def _record_memory_usage(self, result, *, memory_id=None):
+        if result.call is None:
+            return
+        append_jsonl(
+            self.memory_usage_path,
+            memory_usage_records(
+                source_index=result.source_index,
+                memory_id=str(memory_id) if memory_id is not None else None,
+                call=result.call,
+            ),
+        )
+
+    def _record_memory_failure(self, *, source_index=None, memory_id=None):
+        append_jsonl(
+            self.memory_usage_path,
+            [
+                {
+                    "schema_version": 1,
+                    "record_type": "memory_aggregate",
+                    "scope": "memory_construction",
+                    "source_index": source_index,
+                    "memory_id": (
+                        str(memory_id) if memory_id is not None else None
+                    ),
+                    "call_count": 0,
+                    "reported_call_count": 0,
+                    "usage_complete": False,
+                    "prompt_tokens": None,
+                    "completion_tokens": None,
+                    "total_tokens": None,
+                    "reported_prompt_tokens": 0,
+                    "reported_completion_tokens": 0,
+                    "reported_total_tokens": 0,
+                }
+            ],
+        )
 
     def process_trajectory_item_reflect(self, trajectory, reward, workflow):
         if not reward and workflow != "":
@@ -280,13 +364,27 @@ class Memory:
 
         new_documents = []
         with ThreadPoolExecutor(max_workers=16) as executor:
-            future_to_data = {executor.submit(self.process_trajectory_item, d): d for d in traj_data}
+            future_to_data = {
+                executor.submit(
+                    self._process_trajectory_item_with_usage, d, source_index
+                ): (d, source_index)
+                for source_index, d in enumerate(traj_data)
+            }
             for future in tqdm(as_completed(future_to_data), desc="Building memory from trajectory", total=len(traj_data)):
                 try:
-                    doc = future.result()
-                    if doc:  # Only add non-None results
-                        new_documents.append(doc)
+                    build_result = future.result()
+                    if build_result.document:  # Only add non-None results
+                        new_documents.append(build_result.document)
+                        self._record_memory_usage(
+                            build_result,
+                            memory_id=build_result.document.metadata.get("memory_id"),
+                        )
                 except Exception as e:
+                    source_item, source_index = future_to_data[future]
+                    self._record_memory_failure(
+                        source_index=source_index,
+                        memory_id=source_item.get("memory_id"),
+                    )
                     print(f"[ERROR] An error occurred while processing trajectory item: {e}")
         
         # Update documents list and save to disk
@@ -397,7 +495,7 @@ class Memory:
         """
         # Generate workflow
         if self.build_policy == "round":
-            events = get_llm_response(
+            events_result = get_llm_response(
                 generate_events_from_trajectory_prompt(query, trajectory),
                 is_string=False,
                 model=self.build_model,
@@ -407,7 +505,8 @@ class Memory:
                 seed=self.build_seed,
                 top_k=self.build_top_k,
             )
-            workflow_ids = get_llm_response(
+            events = events_result.value
+            workflow_ids_result = get_llm_response(
                 generate_workflow_from_events_prompt(query, events),
                 is_string=False,
                 model=self.build_model,
@@ -417,20 +516,28 @@ class Memory:
                 seed=self.build_seed,
                 top_k=self.build_top_k,
             )
+            workflow_ids = workflow_ids_result.value
             workflow = [events[wid - 1]['action'] for wid in workflow_ids]
         elif self.build_policy == "direct":
-            workflow = get_llm_response(
-                generate_workflow_from_trajectory_prompt(query, trajectory),
-                is_string=True,
-                model=self.build_model,
-                api_key=self.build_api_key,
-                api_base_url=self.build_api_base_url,
-                temperature=self.build_temperature,
-                seed=self.build_seed,
-                top_k=self.build_top_k,
-            )
+            workflow = self.build_with_usage(query, trajectory).workflow
         
         return workflow
+
+    def build_with_usage(self, query, trajectory):
+        """Build one direct workflow and preserve its provider-reported usage."""
+        if self.build_policy != "direct":
+            raise ValueError("Token usage logging only supports direct build policy")
+        result = get_llm_response(
+            generate_workflow_from_trajectory_prompt(query, trajectory),
+            is_string=True,
+            model=self.build_model,
+            api_key=self.build_api_key,
+            api_base_url=self.build_api_base_url,
+            temperature=self.build_temperature,
+            seed=self.build_seed,
+            top_k=self.build_top_k,
+        )
+        return MemoryBuildResult(workflow=result.value, call=result.call)
 
     def retrieve(self, key):
         """
@@ -567,13 +674,23 @@ class Memory:
             item_list = [{"source": "test", "query": query, "trajectory": trajectory} for query, trajectory in zip(query_list, trajectory_list)]
             new_documents = []
             with ThreadPoolExecutor(max_workers=16) as executor:
-                future_to_data = {executor.submit(self.process_trajectory_item, d): d for d in item_list}
+                future_to_data = {
+                    executor.submit(
+                        self._process_trajectory_item_with_usage,
+                        d,
+                        len(self.documents) + source_index,
+                    ): (d, len(self.documents) + source_index)
+                    for source_index, d in enumerate(item_list)
+                }
                 for future in tqdm(as_completed(future_to_data), desc="Building memory from trajectory", total=len(item_list)):
                     try:
-                        doc = future.result()
-                        if doc:  # Only add non-None results
-                            new_documents.append(doc)
+                        build_result = future.result()
+                        if build_result.document:  # Only add non-None results
+                            new_documents.append(build_result.document)
+                            self._record_memory_usage(build_result)
                     except Exception as e:
+                        _, source_index = future_to_data[future]
+                        self._record_memory_failure(source_index=source_index)
                         print(f"[ERROR] An error occurred while processing trajectory item: {e}")
             
             # Update documents list and save to disk
@@ -588,13 +705,23 @@ class Memory:
             print(f"Filter out {len(item_list)}/{len(query_list)} items")
             new_documents = []
             with ThreadPoolExecutor(max_workers=16) as executor:
-                future_to_data = {executor.submit(self.process_trajectory_item, d): d for d in item_list}
+                future_to_data = {
+                    executor.submit(
+                        self._process_trajectory_item_with_usage,
+                        d,
+                        len(self.documents) + source_index,
+                    ): (d, len(self.documents) + source_index)
+                    for source_index, d in enumerate(item_list)
+                }
                 for future in tqdm(as_completed(future_to_data), desc="Building memory from trajectory", total=len(item_list)):
                     try:
-                        doc = future.result()
-                        if doc:  # Only add non-None results
-                            new_documents.append(doc)
+                        build_result = future.result()
+                        if build_result.document:  # Only add non-None results
+                            new_documents.append(build_result.document)
+                            self._record_memory_usage(build_result)
                     except Exception as e:
+                        _, source_index = future_to_data[future]
+                        self._record_memory_failure(source_index=source_index)
                         print(f"[ERROR] An error occurred while processing trajectory item: {e}")
 
             self.documents.extend(new_documents)
@@ -615,13 +742,23 @@ class Memory:
                     wrong_traj.append((query, trajectory, workflow, reward))
             new_documents = []
             with ThreadPoolExecutor(max_workers=16) as executor:
-                future_to_data = {executor.submit(self.process_trajectory_item, {"source": "test", "query": query, "trajectory": trajectory}): (query, trajectory) for query, trajectory, _, _ in right_traj}
+                future_to_data = {
+                    executor.submit(
+                        self._process_trajectory_item_with_usage,
+                        {"source": "test", "query": query, "trajectory": trajectory},
+                        len(self.documents) + source_index,
+                    ): ((query, trajectory), len(self.documents) + source_index)
+                    for source_index, (query, trajectory, _, _) in enumerate(right_traj)
+                }
                 for future in tqdm(as_completed(future_to_data), desc="Building memory from trajectory", total=len(right_traj)):
                     try:
-                        doc = future.result()
-                        if doc:  # Only add non-None results
-                            new_documents.append(doc)
+                        build_result = future.result()
+                        if build_result.document:  # Only add non-None results
+                            new_documents.append(build_result.document)
+                            self._record_memory_usage(build_result)
                     except Exception as e:
+                        _, source_index = future_to_data[future]
+                        self._record_memory_failure(source_index=source_index)
                         print(f"[ERROR] An error occurred while processing trajectory item: {e}")
             self.documents.extend(new_documents)
 

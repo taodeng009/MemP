@@ -83,6 +83,7 @@ from ProcedureMem.online_construction import (
 from ProcedureMem.build_edge_subsets import DEFAULT_OUTPUT as DEFAULT_EDGE_SUBSET_MANIFEST
 from ProcedureMem.benchmark_config import candidate_score_threshold
 from ProcedureMem.reranker import DEFAULT_MODEL, OpenMemReranker
+from ProcedureMem.llm_usage import append_jsonl, task_usage_records
 
 
 def _oracle_horizon_argument(value: str) -> int | str:
@@ -369,11 +370,12 @@ def _default_manifest_path(split: str, seed: int, limit_tasks: int | None) -> Pa
 
 def _make_llm(model: str, temperature: float, seed: int):
     from litellm import completion
+    from ProcedureMem.llm_usage import LLMCallResult, extract_usage
 
     api_base = os.getenv("OPENAI_API_BASE")
     routed_model = resolve_litellm_model(model, api_base)
 
-    def call(messages: list[dict[str, str]]) -> str:
+    def call(messages: list[dict[str, str]]) -> LLMCallResult:
         kwargs: dict[str, Any] = {
             "model": routed_model,
             "messages": messages,
@@ -388,7 +390,12 @@ def _make_llm(model: str, temperature: float, seed: int):
         content = response.choices[0].message.content
         if content is None:
             raise RuntimeError("LLM returned an empty response")
-        return content
+        return LLMCallResult(
+            content=content,
+            usage=extract_usage(response),
+            model=getattr(response, "model", None) or routed_model,
+            request_id=getattr(response, "id", None),
+        )
 
     return call, routed_model
 
@@ -1428,6 +1435,18 @@ def main(argv: Sequence[str] | None = None) -> int:
                 env.close()
 
         for local_index, (task_id, result) in enumerate(zip(actual_ids, batch_results)):
+            task_index = offset + local_index
+            llm_calls = result.pop("llm_calls")
+            token_usage = result.pop("token_usage")
+            append_jsonl(
+                condition_dir / "token_usage.jsonl",
+                task_usage_records(
+                    task_index=task_index,
+                    task_id=task_id,
+                    calls=llm_calls,
+                    aggregate=token_usage,
+                ),
+            )
             retrieved_records = retrieved_by_task[local_index]
             top1_record = retrieved_records[0] if retrieved_records else {}
             rerank_record = rerank_by_task[local_index]
@@ -1436,7 +1455,7 @@ def main(argv: Sequence[str] | None = None) -> int:
                     "schema_version": 1,
                     "experiment_name": args.experiment_name,
                     "task_id": task_id,
-                    "task_index": offset + local_index,
+                    "task_index": task_index,
                     "task_type": _task_name(task_id).split("/", 1)[0],
                     "query": task_query(clean_observations[local_index]),
                     "split": args.split,

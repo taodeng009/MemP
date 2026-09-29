@@ -8,6 +8,8 @@ from concurrent.futures import ThreadPoolExecutor, as_completed
 from dataclasses import dataclass, field
 from typing import Any, Callable, Sequence
 
+from ProcedureMem.llm_usage import LLMCallResult, LLMUsage, aggregate_usage, call_usage_fields
+
 
 ACTION_PATTERNS = (
     re.compile(r"^look$"),
@@ -128,6 +130,7 @@ class TaskState:
     termination_reason: str | None = None
     error: str | None = None
     actions: list[str] = field(default_factory=list)
+    llm_calls: list[dict[str, Any]] = field(default_factory=list)
 
     def finish(self, reason: str, *, error: str | None = None) -> None:
         self.active = False
@@ -135,6 +138,14 @@ class TaskState:
         self.error = error
 
     def as_result(self) -> dict[str, Any]:
+        usages = [
+            LLMUsage(
+                call["prompt_tokens"],
+                call["completion_tokens"],
+                call["total_tokens"],
+            )
+            for call in self.llm_calls
+        ]
         return {
             "messages": self.messages,
             "reward": self.reward,
@@ -144,6 +155,8 @@ class TaskState:
             "error": self.error,
             "actions": self.actions,
             "trajectory": self.trajectory,
+            "llm_calls": self.llm_calls,
+            "token_usage": aggregate_usage(usages),
         }
 
 
@@ -153,7 +166,7 @@ def run_alfworld_batch(
     observations: Sequence[str],
     trajectory_observations: Sequence[str] | None = None,
     names: Sequence[str],
-    llm_fn: Callable[[list[dict[str, str]]], str],
+    llm_fn: Callable[[list[dict[str, str]]], LLMCallResult],
     system_prompt: str,
     few_shot: bool = True,
     max_steps: int = 30,
@@ -204,10 +217,21 @@ def run_alfworld_batch(
             for future in as_completed(futures):
                 index = futures[future]
                 try:
-                    response = future.result()
-                    if not isinstance(response, str):
-                        raise TypeError(f"LLM returned {type(response).__name__}, expected str")
+                    result = future.result()
+                    if not isinstance(result, LLMCallResult):
+                        raise TypeError(
+                            f"LLM returned {type(result).__name__}, "
+                            "expected LLMCallResult"
+                        )
+                    response = result.content
                     responses[index] = response
+                    states[index].llm_calls.append(
+                        {
+                            "step": states[index].steps + 1,
+                            "call_index": len(states[index].llm_calls) + 1,
+                            **call_usage_fields(result),
+                        }
+                    )
                     states[index].messages.append(
                         {"role": "assistant", "content": response}
                     )

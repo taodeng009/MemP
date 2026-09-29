@@ -150,7 +150,7 @@ def main(argv: Sequence[str] | None = None) -> int:
             temperature=temperature,
             seed=seed,
             top_k=top_k,
-        )
+        ).value
 
     print(f"Environment: {env_path}")
     print(f"Builder model: {model}")
