@@ -76,6 +76,7 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--batch-size", type=int)
     parser.add_argument("--max-steps", type=int)
     parser.add_argument("--temperature", type=float)
+    parser.add_argument("--agent-max-tokens", type=int)
     parser.add_argument("--top-k", type=int)
     parser.add_argument("--score-threshold", type=float)
     parser.add_argument("--model")
@@ -112,6 +113,11 @@ def _resolve_settings(args: argparse.Namespace, snapshot: Mapping[str, Any]) -> 
             if args.temperature is not None
             else float(source_value("temperature", 0.0))
         ),
+        "agent_max_tokens": (
+            args.agent_max_tokens
+            if args.agent_max_tokens is not None
+            else int(source_value("agent_max_tokens", 1024))
+        ),
         "top_k": (
             args.top_k
             if args.top_k is not None
@@ -144,7 +150,13 @@ def _resolve_settings(args: argparse.Namespace, snapshot: Mapping[str, Any]) -> 
             else int(source_value("memory_build_top_k", 1))
         ),
     }
-    for name in ("batch_size", "max_steps", "top_k", "memory_build_top_k"):
+    for name in (
+        "batch_size",
+        "max_steps",
+        "agent_max_tokens",
+        "top_k",
+        "memory_build_top_k",
+    ):
         if int(values[name]) < 1:
             raise ValueError(f"{name} must be at least 1")
     if values["score_threshold"] < 0:
@@ -590,6 +602,7 @@ def _evaluate_baseline_stability(
             str(runtime.model_name),
             float(settings["temperature"]),
             int(settings["seed"]),
+            int(settings["agent_max_tokens"]),
         )
         routed_models.append(routed_model)
         memory, _ = _condition_memory(snapshot, embedding, settings)
@@ -671,7 +684,10 @@ def _evaluate(
         require_embedding=True,
     )
     llm, routed_model = _make_llm(
-        str(runtime.model_name), float(settings["temperature"]), int(settings["seed"])
+        str(runtime.model_name),
+        float(settings["temperature"]),
+        int(settings["seed"]),
+        int(settings["agent_max_tokens"]),
     )
     embedding = load_cached_embedding(output_dir / "embedding_cache")
     examples = json.loads(DEFAULT_EXAMPLES_PATH.read_text(encoding="utf-8"))

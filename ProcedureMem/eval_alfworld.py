@@ -107,6 +107,12 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--max-steps", type=int, default=30)
     parser.add_argument("--temperature", type=float, default=1.0)
     parser.add_argument(
+        "--agent-max-tokens",
+        type=int,
+        default=1024,
+        help="Maximum completion tokens for each Agent LLM call (default: 1024)",
+    )
+    parser.add_argument(
         "--few-shot", action=argparse.BooleanOptionalAction, default=True
     )
     parser.add_argument("--top-k", type=int, default=3)
@@ -198,7 +204,7 @@ def build_parser() -> argparse.ArgumentParser:
 
 
 def _validate_args(parser: argparse.ArgumentParser, args: argparse.Namespace) -> None:
-    for name in ("batch_size", "max_steps", "top_k"):
+    for name in ("batch_size", "max_steps", "top_k", "agent_max_tokens"):
         if getattr(args, name) < 1:
             parser.error(f"--{name.replace('_', '-')} must be at least 1")
     if args.limit_tasks is not None and args.limit_tasks < 1:
@@ -368,7 +374,12 @@ def _default_manifest_path(split: str, seed: int, limit_tasks: int | None) -> Pa
     return DEFAULT_RESULTS_DIR / "manifests" / f"{split}_seed{seed}_n{count}.json"
 
 
-def _make_llm(model: str, temperature: float, seed: int):
+def _make_llm(
+    model: str,
+    temperature: float,
+    seed: int,
+    max_tokens: int = 1024,
+):
     from litellm import completion
     from ProcedureMem.llm_usage import LLMCallResult, extract_usage
 
@@ -383,6 +394,7 @@ def _make_llm(model: str, temperature: float, seed: int):
             "num_retries": 10,
             "temperature": temperature,
             "seed": seed,
+            "max_tokens": max_tokens,
         }
         if api_base:
             kwargs["api_base"] = api_base
@@ -730,7 +742,12 @@ def main(argv: Sequence[str] | None = None) -> int:
             "diversity_pool",
         },
     )
-    llm, routed_model = _make_llm(settings.model_name, args.temperature, manifest["seed"])
+    llm, routed_model = _make_llm(
+        settings.model_name,
+        args.temperature,
+        manifest["seed"],
+        args.agent_max_tokens,
+    )
     candidate_memory_path = None
     scheduled_candidate_pool_sha256 = None
     diversity_manifest_path = None
@@ -916,6 +933,7 @@ def main(argv: Sequence[str] | None = None) -> int:
         "seed": manifest["seed"],
         "batch_size": args.batch_size,
         "max_steps": args.max_steps,
+        "agent_max_tokens": args.agent_max_tokens,
         "temperature": args.temperature,
         "top_p": 1.0,
         "few_shot": args.few_shot,
