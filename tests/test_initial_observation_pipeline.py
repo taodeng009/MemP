@@ -65,6 +65,19 @@ class InitialObservationTests(unittest.TestCase):
                 with patch.object(builder, 'request_batch') as request:
                     builder.main()
                     request.assert_not_called()
+                # Default endpoint-only mode must not load transformers/tokenizer.
+                endpoint_output = root / 'endpoint_only.npz'
+                endpoint_command = ['builder', '--inputs', str(inputs), '--output', str(endpoint_output),
+                                    '--env-file', str(env)]
+                forbidden_transformers = types.SimpleNamespace(AutoTokenizer=types.SimpleNamespace(
+                    from_pretrained=lambda *args, **kwargs: (_ for _ in ()).throw(AssertionError('Tokenizer must be optional'))))
+                with patch.object(sys, 'argv', endpoint_command), patch.dict(sys.modules, {'transformers': forbidden_transformers}), \
+                        patch.object(builder, 'request_batch', return_value=[[1.0] * 768] * 3):
+                    builder.main()
+                with np.load(endpoint_output, allow_pickle=False) as cache:
+                    self.assertTrue(np.all(cache['token_counts'] == -1))
+                audit = json.loads(endpoint_output.with_name(endpoint_output.name + '.tokens.json').read_text())
+                self.assertFalse(audit['local_token_check_performed'])
 
 
 if __name__ == '__main__':

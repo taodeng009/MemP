@@ -1,7 +1,7 @@
 """Server-side batched embeddings with token validation and resumable checkpoints.
 
-Only this script, the prepared inputs, numpy/transformers, a local tokenizer,
-and the existing OpenAI-compatible embedding service are required on the server.
+Only this script, the prepared inputs, numpy, and the existing embedding
+service are required. A local tokenizer/transformers is an optional check.
 """
 
 from __future__ import annotations
@@ -92,8 +92,8 @@ def main():
     parser.add_argument('--inputs', type=Path, required=True)
     parser.add_argument('--output', type=Path, required=True)
     parser.add_argument('--env-file', type=Path, default=Path('.env'))
-    parser.add_argument('--tokenizer-path', type=str, required=True,
-                        help='Local tokenizer directory used by the deployed BGE model')
+    parser.add_argument('--tokenizer-path', type=str,
+                        help='Optional local tokenizer directory for pre-request length checks')
     parser.add_argument('--max-input-tokens', type=int, default=512,
                         help='Set to the deployed embedding service input token limit')
     parser.add_argument('--batch-size', type=int, default=16)
@@ -116,20 +116,26 @@ def main():
                 raise ValueError('Existing output cache does not match inputs; use a new output path')
         print('Validated existing 134 x 768 cache; no embedding calls needed.')
         return
-    from transformers import AutoTokenizer
-    tokenizer = AutoTokenizer.from_pretrained(args.tokenizer_path, local_files_only=True)
-    token_counts = [len(tokenizer.encode(row['embedding_text'], add_special_tokens=True, truncation=False)) for row in rows]
-    if max(token_counts) > args.max_input_tokens:
-        raise ValueError(f'Input exceeds configured token limit: max={max(token_counts)}, limit={args.max_input_tokens}; no requests sent')
+    token_counts = [-1] * len(rows)  # Unknown unless optional tokenizer supplied.
+    if args.tokenizer_path:
+        from transformers import AutoTokenizer
+        tokenizer = AutoTokenizer.from_pretrained(args.tokenizer_path, local_files_only=True)
+        token_counts = [len(tokenizer.encode(row['embedding_text'], add_special_tokens=True, truncation=False)) for row in rows]
+        if max(token_counts) > args.max_input_tokens:
+            raise ValueError(f'Input exceeds configured token limit: max={max(token_counts)}, limit={args.max_input_tokens}; no requests sent')
     args.output.parent.mkdir(parents=True, exist_ok=True)
     token_summary = {
         'model': MODEL, 'tokenizer_path': args.tokenizer_path, 'max_input_tokens': args.max_input_tokens,
-        'min_tokens': min(token_counts), 'max_tokens': max(token_counts),
+        'local_token_check_performed': bool(args.tokenizer_path),
+        'min_tokens': min(token_counts) if args.tokenizer_path else None,
+        'max_tokens': max(token_counts) if args.tokenizer_path else None,
+        'max_input_characters': max(len(row['embedding_text']) for row in rows),
         'task_token_counts': token_counts, 'input_sha256': input_hash,
     }
     atomic_json(args.output.with_name(args.output.name + '.tokens.json'), token_summary)
     if args.validate_only:
-        print(json.dumps({'tasks': len(rows), 'min_tokens': min(token_counts), 'max_tokens': max(token_counts)}))
+        print(json.dumps({'tasks': len(rows), 'local_token_check_performed': bool(args.tokenizer_path),
+                          'min_tokens': token_summary['min_tokens'], 'max_tokens': token_summary['max_tokens']}))
         return
     values = load_env(args.env_file)
     def configured(key):
