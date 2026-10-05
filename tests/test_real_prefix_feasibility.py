@@ -1,4 +1,5 @@
 import importlib.util
+import hashlib
 import json
 from pathlib import Path
 import sys
@@ -22,6 +23,19 @@ with patch.dict(sys.modules, {'alfworld_capability': adapter}):
 
 
 class RealPrefixTests(unittest.TestCase):
+    def test_label_hash_allows_only_line_ending_conversion(self):
+        lf = b'[{"sample_id":"s1","final_success":1}]\n'
+        crlf = lf.replace(b'\n', b'\r\n')
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / 'labels.json'
+            for data, original in [(lf, lf), (lf, crlf), (crlf, lf)]:
+                path.write_bytes(data)
+                result = runner.verify_label_hash(path, hashlib.sha256(original).hexdigest())
+                self.assertEqual(result, 'exact_bytes' if data == original else 'line_endings_only')
+            path.write_bytes(lf.replace(b'"final_success":1', b'"final_success":0'))
+            with self.assertRaises(ValueError):
+                runner.verify_label_hash(path, hashlib.sha256(crlf).hexdigest())
+
     def test_only_first_three_action_observation_pairs(self):
         record = {'query': 'put a mug on desk.', 'actions': ['a1', 'a2', 'a3'],
                   'reward': 'SECRET_LABEL', 'termination_reason': 'SECRET_TERMINATION',

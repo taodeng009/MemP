@@ -34,6 +34,8 @@ python llm_verifier/real_prefix_feasibility.py evaluate
 
 Evaluation requires numpy, opens final labels only after validating all120×3 scores complete, and verifies label hash. Outputs: evaluation_task_scores.csv (task_id/run_id/L, scores1–3 and mean, label), metrics_by_L.csv (AUROC, Average Precision, success/failure mean/median), metrics_by_L.svg, evaluation_summary.json, human_review_examples.json.
 
+Label validation accepts exact byte hashes or solely LF/CRLF conversion (e.g. Git Windows→Linux checkout). Actual content edits remain rejected. The validation mode is recorded in evaluation_summary.json. This compatibility change does not modify scoring inputs, existing scores or the verifier prompt; existing completed runs need evaluation only, not rescoring.
+
 Review examples: highest L3-score failures; lowest L3-score successes; largest label-consistent score change L0→L3; largest label-inconsistent change. Full L0–3 visible prefixes and score sequence attached. Improvement/worsening is an endpoint comparison, not guaranteed monotonic; .5 threshold crossings also listed. Empty category remains empty, never fabricated. Extremes are descriptive ranks, not claims of a calibrated cutoff.
 
 Balanced case-control sample has prevalence .5: AP baseline .5, not deployment prevalence. Repeated task IDs may introduce dependence. Three repetitions reflect verifier variability, not independent task samples. No significance claims or calibrated-success-probability interpretation. No scores/results available locally until the server evaluation is returned.

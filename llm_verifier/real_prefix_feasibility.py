@@ -20,6 +20,18 @@ def digest(path):
     return hashlib.sha256(path.read_bytes()).hexdigest()
 
 
+def verify_label_hash(path, expected):
+    """Accept exact bytes or LF/CRLF-only conversion; never ignore label edits."""
+    raw = path.read_bytes()
+    if hashlib.sha256(raw).hexdigest() == expected:
+        return 'exact_bytes'
+    lf = raw.replace(b'\r\n', b'\n')
+    if any(hashlib.sha256(candidate).hexdigest() == expected
+           for candidate in (lf, lf.replace(b'\n', b'\r\n'))):
+        return 'line_endings_only'
+    raise ValueError('Label file content changed (not merely LF/CRLF conversion)')
+
+
 def first_three(record):
     trajectory = record['trajectory']
     first = trajectory[0]
@@ -180,8 +192,7 @@ def evaluate(args):
         raise ValueError('Invalid completed scores')
     labels = json.loads((args.directory / 'prepared/evaluation_labels.json').read_text(encoding='utf-8'))
     audit = json.loads((args.directory / 'prepared/sampling_audit.json').read_text(encoding='utf-8'))
-    if digest(args.directory / 'prepared/evaluation_labels.json') != audit['label_sha256']:
-        raise ValueError('Label file changed')
+    label_validation = verify_label_hash(args.directory / 'prepared/evaluation_labels.json', audit['label_sha256'])
     by_id = {r['sample_id']: r for r in labels}
     if len(by_id) != 30 or sum(r['final_success'] for r in labels) != 15:
         raise ValueError('Label/sample mismatch')
@@ -223,6 +234,7 @@ def evaluate(args):
     write_csv(output / 'metrics_by_L.csv', metrics)
     save(output / 'human_review_examples.json', examples)
     save(output / 'evaluation_summary.json', {'metrics': metrics, 'examples': examples,
+         'label_hash_validation': label_validation,
          'notes': '30 stratified records, 15/15. AP prevalence reference .5; not representative deployment prevalence. Repeated task IDs may occur across runs; no independence/significance claims. Score is not calibrated success probability. Correction/worsening is L3 vs L0 movement toward/away from observed label, not necessarily monotonic at every intermediate L.'})
     # Dependency-free scientific line chart.
     svg = ['<svg xmlns="http://www.w3.org/2000/svg" width="720" height="450"><rect width="100%" height="100%" fill="white"/>', '<g font-family="Arial" font-size="14">']
