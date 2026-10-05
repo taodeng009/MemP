@@ -1,0 +1,29 @@
+{
+  "seed": 42,
+  "sample_unit": "(task_id, run_id)",
+  "pool_success": 235,
+  "pool_failure": 167,
+  "sample_success": 15,
+  "sample_failure": 15,
+  "sources": [
+    {
+      "run_id": "run1",
+      "path": "C:\\Users\\57248\\OneDrive\\文档\\PhD Research Works\\multi agent for edge cloud collaboration\\code\\MemP\\ProcedureMem\\Alfworld\\results\\paired\\valid_unseen_seed42_n134_b2_qwen36_27b_fp8_top3_run1\\memory\\results.jsonl",
+      "sha256": "54070bfbf5003b1eca247167d37c6991510257ce98d7394087ca416e74158dad"
+    },
+    {
+      "run_id": "run2",
+      "path": "C:\\Users\\57248\\OneDrive\\文档\\PhD Research Works\\multi agent for edge cloud collaboration\\code\\MemP\\ProcedureMem\\Alfworld\\results\\paired\\valid_unseen_seed42_n134_b2_qwen36_27b_fp8_top3_run2\\memory\\results.jsonl",
+      "sha256": "126e642b13c12ba58ee2d626e813f05062c60c3c2fd08d633f4ae6d0d733dda9"
+    },
+    {
+      "run_id": "run3",
+      "path": "C:\\Users\\57248\\OneDrive\\文档\\PhD Research Works\\multi agent for edge cloud collaboration\\code\\MemP\\ProcedureMem\\Alfworld\\results\\paired\\valid_unseen_seed42_n134_b2_qwen36_27b_fp8_top3_run3\\memory\\results.jsonl",
+      "sha256": "a194df656b9b0ecc6d7b09f853a6942b92844d21d5cc4e3a9240cf7b70ef3fa1"
+    }
+  ],
+  "unique_sampled_task_ids": 29,
+  "scoring_input_sha256": "bb80aa2dbc3f0c5fb6b414e1f6c8fbaf1ddc2ecbd7ae8d2346479f9aad51f069",
+  "label_sha256": "8c2b7ab29189e4033026b2884cf3dd3fef9761b402be600af01fd060033c0c70",
+  "prompt_adapter_sha256": "06b9cf0a4a09bbb69f94be10e71236f7a195a663fab221cf85a7513a26e16ca6"
+}

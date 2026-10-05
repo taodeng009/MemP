@@ -11,7 +11,7 @@ Dry preparation (no installed package/API needed):
 ```bash
 cd ~/project/MemP
 python llm_verifier/alfworld_capability.py --dry-run \
-  --output-dir docs/results/alfworld_capability_verifier_smoke_2026-10-05/prompts_only
+  --output-dir llm_verifier/results/alfworld_capability_verifier_smoke_2026-10-05/prompts_only
 ```
 
 Real evaluation, using your chosen backend/model configuration:
@@ -21,7 +21,7 @@ export VERIFIER_MODEL='your-served-verifier-model'
 export VERIFIER_BASE_URL='http://your-server:port/v1'
 export VERIFIER_API_KEY='your-key'
 python llm_verifier/alfworld_capability.py --repeats 3 \
-  --output-dir docs/results/alfworld_capability_verifier_smoke_2026-10-05/real_run1
+  --output-dir llm_verifier/results/alfworld_capability_verifier_smoke_2026-10-05/real_run1
 ```
 
 Alternatively `--env-file` reads these three variables without printing secrets. Without VERIFIER_BASE_URL the official client resolver uses OPENAI_BASE_URL, DEEPSEEK_API_KEY or VERTEX_API_KEY. Specify VERIFIER_MODEL explicitly, never implicitly use the Edge model. OpenAI-compatible service must support the official score prefill/structured_outputs mechanism; a generic endpoint supporting only sampled text may fail. Model/package must actually be accessible on server; no package installations are performed by the runner.

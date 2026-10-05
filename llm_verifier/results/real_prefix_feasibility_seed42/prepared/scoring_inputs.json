@@ -1,0 +1,1652 @@
+[
+  {
+    "sample_id": "sample_01",
+    "L": 0,
+    "task": "examine the cd with the desklamp.",
+    "initial_observation": "You are in the middle of a room. Looking quickly around you, you see a bed 1, a desk 2, a desk 1, a drawer 6, a drawer 5, a drawer 4, a drawer 3, a drawer 2, a drawer 1, a garbagecan 1, a laundryhamper 1, a safe 1, a shelf 6, a shelf 5, a shelf 4, a shelf 3, a shelf 2, and a shelf 1.",
+    "prefix": []
+  },
+  {
+    "sample_id": "sample_01",
+    "L": 1,
+    "task": "examine the cd with the desklamp.",
+    "initial_observation": "You are in the middle of a room. Looking quickly around you, you see a bed 1, a desk 2, a desk 1, a drawer 6, a drawer 5, a drawer 4, a drawer 3, a drawer 2, a drawer 1, a garbagecan 1, a laundryhamper 1, a safe 1, a shelf 6, a shelf 5, a shelf 4, a shelf 3, a shelf 2, and a shelf 1.",
+    "prefix": [
+      {
+        "action": "go to drawer 1",
+        "observation": "You arrive at drawer 1. The drawer 1 is closed."
+      }
+    ]
+  },
+  {
+    "sample_id": "sample_01",
+    "L": 2,
+    "task": "examine the cd with the desklamp.",
+    "initial_observation": "You are in the middle of a room. Looking quickly around you, you see a bed 1, a desk 2, a desk 1, a drawer 6, a drawer 5, a drawer 4, a drawer 3, a drawer 2, a drawer 1, a garbagecan 1, a laundryhamper 1, a safe 1, a shelf 6, a shelf 5, a shelf 4, a shelf 3, a shelf 2, and a shelf 1.",
+    "prefix": [
+      {
+        "action": "go to drawer 1",
+        "observation": "You arrive at drawer 1. The drawer 1 is closed."
+      },
+      {
+        "action": "open drawer 1",
+        "observation": "You open the drawer 1. The drawer 1 is open. In it, you see nothing."
+      }
+    ]
+  },
+  {
+    "sample_id": "sample_01",
+    "L": 3,
+    "task": "examine the cd with the desklamp.",
+    "initial_observation": "You are in the middle of a room. Looking quickly around you, you see a bed 1, a desk 2, a desk 1, a drawer 6, a drawer 5, a drawer 4, a drawer 3, a drawer 2, a drawer 1, a garbagecan 1, a laundryhamper 1, a safe 1, a shelf 6, a shelf 5, a shelf 4, a shelf 3, a shelf 2, and a shelf 1.",
+    "prefix": [
+      {
+        "action": "go to drawer 1",
+        "observation": "You arrive at drawer 1. The drawer 1 is closed."
+      },
+      {
+        "action": "open drawer 1",
+        "observation": "You open the drawer 1. The drawer 1 is open. In it, you see nothing."
+      },
+      {
+        "action": "go to shelf 1",
+        "observation": "You arrive at shelf 1. On the shelf 1, you see nothing."
+      }
+    ]
+  },
+  {
+    "sample_id": "sample_02",
+    "L": 0,
+    "task": "clean some soapbar and put it in cabinet.",
+    "initial_observation": "You are in the middle of a room. Looking quickly around you, you see a cabinet 4, a cabinet 3, a cabinet 2, a cabinet 1, a countertop 1, a garbagecan 1, a handtowelholder 2, a handtowelholder 1, a sinkbasin 2, a sinkbasin 1, a toilet 1, a toiletpaperhanger 1, and a towelholder 1.",
+    "prefix": []
+  },
+  {
+    "sample_id": "sample_02",
+    "L": 1,
+    "task": "clean some soapbar and put it in cabinet.",
+    "initial_observation": "You are in the middle of a room. Looking quickly around you, you see a cabinet 4, a cabinet 3, a cabinet 2, a cabinet 1, a countertop 1, a garbagecan 1, a handtowelholder 2, a handtowelholder 1, a sinkbasin 2, a sinkbasin 1, a toilet 1, a toiletpaperhanger 1, and a towelholder 1.",
+    "prefix": [
+      {
+        "action": "go to countertop 1",
+        "observation": "You arrive at countertop 1. On the countertop 1, you see a candle 3, a candle 1, a soapbottle 1, a spraybottle 2, and a toiletpaper 2."
+      }
+    ]
+  },
+  {
+    "sample_id": "sample_02",
+    "L": 2,
+    "task": "clean some soapbar and put it in cabinet.",
+    "initial_observation": "You are in the middle of a room. Looking quickly around you, you see a cabinet 4, a cabinet 3, a cabinet 2, a cabinet 1, a countertop 1, a garbagecan 1, a handtowelholder 2, a handtowelholder 1, a sinkbasin 2, a sinkbasin 1, a toilet 1, a toiletpaperhanger 1, and a towelholder 1.",
+    "prefix": [
+      {
+        "action": "go to countertop 1",
+        "observation": "You arrive at countertop 1. On the countertop 1, you see a candle 3, a candle 1, a soapbottle 1, a spraybottle 2, and a toiletpaper 2."
+      },
+      {
+        "action": "go to cabinet 1",
+        "observation": "You arrive at cabinet 1. The cabinet 1 is closed."
+      }
+    ]
+  },
+  {
+    "sample_id": "sample_02",
+    "L": 3,
+    "task": "clean some soapbar and put it in cabinet.",
+    "initial_observation": "You are in the middle of a room. Looking quickly around you, you see a cabinet 4, a cabinet 3, a cabinet 2, a cabinet 1, a countertop 1, a garbagecan 1, a handtowelholder 2, a handtowelholder 1, a sinkbasin 2, a sinkbasin 1, a toilet 1, a toiletpaperhanger 1, and a towelholder 1.",
+    "prefix": [
+      {
+        "action": "go to countertop 1",
+        "observation": "You arrive at countertop 1. On the countertop 1, you see a candle 3, a candle 1, a soapbottle 1, a spraybottle 2, and a toiletpaper 2."
+      },
+      {
+        "action": "go to cabinet 1",
+        "observation": "You arrive at cabinet 1. The cabinet 1 is closed."
+      },
+      {
+        "action": "open cabinet 1",
+        "observation": "You open the cabinet 1. The cabinet 1 is open. In it, you see a soapbottle 2."
+      }
+    ]
+  },
+  {
+    "sample_id": "sample_03",
+    "L": 0,
+    "task": "cool some mug and put it in coffeemachine.",
+    "initial_observation": "You are in the middle of a room. Looking quickly around you, you see a cabinet 6, a cabinet 5, a cabinet 4, a cabinet 3, a cabinet 2, a cabinet 1, a coffeemachine 1, a countertop 3, a countertop 2, a countertop 1, a drawer 3, a drawer 2, a drawer 1, a fridge 1, a garbagecan 1, a microwave 1, a shelf 3, a shelf 2, a shelf 1, a sinkbasin 1, a stoveburner 4, a stoveburner 3, a stoveburner 2, a stoveburner 1, and a toaster 1.",
+    "prefix": []
+  },
+  {
+    "sample_id": "sample_03",
+    "L": 1,
+    "task": "cool some mug and put it in coffeemachine.",
+    "initial_observation": "You are in the middle of a room. Looking quickly around you, you see a cabinet 6, a cabinet 5, a cabinet 4, a cabinet 3, a cabinet 2, a cabinet 1, a coffeemachine 1, a countertop 3, a countertop 2, a countertop 1, a drawer 3, a drawer 2, a drawer 1, a fridge 1, a garbagecan 1, a microwave 1, a shelf 3, a shelf 2, a shelf 1, a sinkbasin 1, a stoveburner 4, a stoveburner 3, a stoveburner 2, a stoveburner 1, and a toaster 1.",
+    "prefix": [
+      {
+        "action": "go to countertop 1",
+        "observation": "You arrive at countertop 1. On the countertop 1, you see a cellphone 2, a mug 1, and a spoon 1."
+      }
+    ]
+  },
+  {
+    "sample_id": "sample_03",
+    "L": 2,
+    "task": "cool some mug and put it in coffeemachine.",
+    "initial_observation": "You are in the middle of a room. Looking quickly around you, you see a cabinet 6, a cabinet 5, a cabinet 4, a cabinet 3, a cabinet 2, a cabinet 1, a coffeemachine 1, a countertop 3, a countertop 2, a countertop 1, a drawer 3, a drawer 2, a drawer 1, a fridge 1, a garbagecan 1, a microwave 1, a shelf 3, a shelf 2, a shelf 1, a sinkbasin 1, a stoveburner 4, a stoveburner 3, a stoveburner 2, a stoveburner 1, and a toaster 1.",
+    "prefix": [
+      {
+        "action": "go to countertop 1",
+        "observation": "You arrive at countertop 1. On the countertop 1, you see a cellphone 2, a mug 1, and a spoon 1."
+      },
+      {
+        "action": "take mug 1 from countertop 1",
+        "observation": "You pick up the mug 1 from the countertop 1."
+      }
+    ]
+  },
+  {
+    "sample_id": "sample_03",
+    "L": 3,
+    "task": "cool some mug and put it in coffeemachine.",
+    "initial_observation": "You are in the middle of a room. Looking quickly around you, you see a cabinet 6, a cabinet 5, a cabinet 4, a cabinet 3, a cabinet 2, a cabinet 1, a coffeemachine 1, a countertop 3, a countertop 2, a countertop 1, a drawer 3, a drawer 2, a drawer 1, a fridge 1, a garbagecan 1, a microwave 1, a shelf 3, a shelf 2, a shelf 1, a sinkbasin 1, a stoveburner 4, a stoveburner 3, a stoveburner 2, a stoveburner 1, and a toaster 1.",
+    "prefix": [
+      {
+        "action": "go to countertop 1",
+        "observation": "You arrive at countertop 1. On the countertop 1, you see a cellphone 2, a mug 1, and a spoon 1."
+      },
+      {
+        "action": "take mug 1 from countertop 1",
+        "observation": "You pick up the mug 1 from the countertop 1."
+      },
+      {
+        "action": "go to fridge 1",
+        "observation": "You arrive at fridge 1. The fridge 1 is closed."
+      }
+    ]
+  },
+  {
+    "sample_id": "sample_04",
+    "L": 0,
+    "task": "clean some cloth and put it in countertop.",
+    "initial_observation": "You are in the middle of a room. Looking quickly around you, you see a cabinet 4, a cabinet 3, a cabinet 2, a cabinet 1, a countertop 1, a garbagecan 1, a handtowelholder 2, a handtowelholder 1, a sinkbasin 2, a sinkbasin 1, a toilet 1, a toiletpaperhanger 1, and a towelholder 1.",
+    "prefix": []
+  },
+  {
+    "sample_id": "sample_04",
+    "L": 1,
+    "task": "clean some cloth and put it in countertop.",
+    "initial_observation": "You are in the middle of a room. Looking quickly around you, you see a cabinet 4, a cabinet 3, a cabinet 2, a cabinet 1, a countertop 1, a garbagecan 1, a handtowelholder 2, a handtowelholder 1, a sinkbasin 2, a sinkbasin 1, a toilet 1, a toiletpaperhanger 1, and a towelholder 1.",
+    "prefix": [
+      {
+        "action": "go to countertop 1",
+        "observation": "You arrive at countertop 1. On the countertop 1, you see a soapbottle 1, and a spraybottle 1."
+      }
+    ]
+  },
+  {
+    "sample_id": "sample_04",
+    "L": 2,
+    "task": "clean some cloth and put it in countertop.",
+    "initial_observation": "You are in the middle of a room. Looking quickly around you, you see a cabinet 4, a cabinet 3, a cabinet 2, a cabinet 1, a countertop 1, a garbagecan 1, a handtowelholder 2, a handtowelholder 1, a sinkbasin 2, a sinkbasin 1, a toilet 1, a toiletpaperhanger 1, and a towelholder 1.",
+    "prefix": [
+      {
+        "action": "go to countertop 1",
+        "observation": "You arrive at countertop 1. On the countertop 1, you see a soapbottle 1, and a spraybottle 1."
+      },
+      {
+        "action": "go to cabinet 1",
+        "observation": "You arrive at cabinet 1. The cabinet 1 is closed."
+      }
+    ]
+  },
+  {
+    "sample_id": "sample_04",
+    "L": 3,
+    "task": "clean some cloth and put it in countertop.",
+    "initial_observation": "You are in the middle of a room. Looking quickly around you, you see a cabinet 4, a cabinet 3, a cabinet 2, a cabinet 1, a countertop 1, a garbagecan 1, a handtowelholder 2, a handtowelholder 1, a sinkbasin 2, a sinkbasin 1, a toilet 1, a toiletpaperhanger 1, and a towelholder 1.",
+    "prefix": [
+      {
+        "action": "go to countertop 1",
+        "observation": "You arrive at countertop 1. On the countertop 1, you see a soapbottle 1, and a spraybottle 1."
+      },
+      {
+        "action": "go to cabinet 1",
+        "observation": "You arrive at cabinet 1. The cabinet 1 is closed."
+      },
+      {
+        "action": "open cabinet 1",
+        "observation": "You open the cabinet 1. The cabinet 1 is open. In it, you see a cloth 2."
+      }
+    ]
+  },
+  {
+    "sample_id": "sample_05",
+    "L": 0,
+    "task": "examine the book with the desklamp.",
+    "initial_observation": "You are in the middle of a room. Looking quickly around you, you see a bed 1, a desk 2, a desk 1, a drawer 6, a drawer 5, a drawer 4, a drawer 3, a drawer 2, a drawer 1, a garbagecan 1, a laundryhamper 1, a safe 1, a shelf 6, a shelf 5, a shelf 4, a shelf 3, a shelf 2, and a shelf 1.",
+    "prefix": []
+  },
+  {
+    "sample_id": "sample_05",
+    "L": 1,
+    "task": "examine the book with the desklamp.",
+    "initial_observation": "You are in the middle of a room. Looking quickly around you, you see a bed 1, a desk 2, a desk 1, a drawer 6, a drawer 5, a drawer 4, a drawer 3, a drawer 2, a drawer 1, a garbagecan 1, a laundryhamper 1, a safe 1, a shelf 6, a shelf 5, a shelf 4, a shelf 3, a shelf 2, and a shelf 1.",
+    "prefix": [
+      {
+        "action": "go to desk 1",
+        "observation": "You arrive at desk 1. On the desk 1, you see a alarmclock 1, a bowl 2, a cd 1, a cellphone 3, a desklamp 1, a mug 1, a pen 1, and a pencil 1."
+      }
+    ]
+  },
+  {
+    "sample_id": "sample_05",
+    "L": 2,
+    "task": "examine the book with the desklamp.",
+    "initial_observation": "You are in the middle of a room. Looking quickly around you, you see a bed 1, a desk 2, a desk 1, a drawer 6, a drawer 5, a drawer 4, a drawer 3, a drawer 2, a drawer 1, a garbagecan 1, a laundryhamper 1, a safe 1, a shelf 6, a shelf 5, a shelf 4, a shelf 3, a shelf 2, and a shelf 1.",
+    "prefix": [
+      {
+        "action": "go to desk 1",
+        "observation": "You arrive at desk 1. On the desk 1, you see a alarmclock 1, a bowl 2, a cd 1, a cellphone 3, a desklamp 1, a mug 1, a pen 1, and a pencil 1."
+      },
+      {
+        "action": "open drawer 1",
+        "observation": "Nothing happens."
+      }
+    ]
+  },
+  {
+    "sample_id": "sample_05",
+    "L": 3,
+    "task": "examine the book with the desklamp.",
+    "initial_observation": "You are in the middle of a room. Looking quickly around you, you see a bed 1, a desk 2, a desk 1, a drawer 6, a drawer 5, a drawer 4, a drawer 3, a drawer 2, a drawer 1, a garbagecan 1, a laundryhamper 1, a safe 1, a shelf 6, a shelf 5, a shelf 4, a shelf 3, a shelf 2, and a shelf 1.",
+    "prefix": [
+      {
+        "action": "go to desk 1",
+        "observation": "You arrive at desk 1. On the desk 1, you see a alarmclock 1, a bowl 2, a cd 1, a cellphone 3, a desklamp 1, a mug 1, a pen 1, and a pencil 1."
+      },
+      {
+        "action": "open drawer 1",
+        "observation": "Nothing happens."
+      },
+      {
+        "action": "go to shelf 1",
+        "observation": "You arrive at shelf 1. On the shelf 1, you see a bowl 1."
+      }
+    ]
+  },
+  {
+    "sample_id": "sample_06",
+    "L": 0,
+    "task": "put two soapbar in garbagecan.",
+    "initial_observation": "You are in the middle of a room. Looking quickly around you, you see a cabinet 4, a cabinet 3, a cabinet 2, a cabinet 1, a countertop 1, a garbagecan 1, a handtowelholder 2, a handtowelholder 1, a sinkbasin 2, a sinkbasin 1, a toilet 1, a toiletpaperhanger 1, and a towelholder 1.",
+    "prefix": []
+  },
+  {
+    "sample_id": "sample_06",
+    "L": 1,
+    "task": "put two soapbar in garbagecan.",
+    "initial_observation": "You are in the middle of a room. Looking quickly around you, you see a cabinet 4, a cabinet 3, a cabinet 2, a cabinet 1, a countertop 1, a garbagecan 1, a handtowelholder 2, a handtowelholder 1, a sinkbasin 2, a sinkbasin 1, a toilet 1, a toiletpaperhanger 1, and a towelholder 1.",
+    "prefix": [
+      {
+        "action": "go to countertop 1",
+        "observation": "You arrive at countertop 1. On the countertop 1, you see a candle 1, a soapbar 4, a soapbar 3, a soapbar 1, and a spraybottle 1."
+      }
+    ]
+  },
+  {
+    "sample_id": "sample_06",
+    "L": 2,
+    "task": "put two soapbar in garbagecan.",
+    "initial_observation": "You are in the middle of a room. Looking quickly around you, you see a cabinet 4, a cabinet 3, a cabinet 2, a cabinet 1, a countertop 1, a garbagecan 1, a handtowelholder 2, a handtowelholder 1, a sinkbasin 2, a sinkbasin 1, a toilet 1, a toiletpaperhanger 1, and a towelholder 1.",
+    "prefix": [
+      {
+        "action": "go to countertop 1",
+        "observation": "You arrive at countertop 1. On the countertop 1, you see a candle 1, a soapbar 4, a soapbar 3, a soapbar 1, and a spraybottle 1."
+      },
+      {
+        "action": "take soapbar 1 from countertop 1",
+        "observation": "You pick up the soapbar 1 from the countertop 1."
+      }
+    ]
+  },
+  {
+    "sample_id": "sample_06",
+    "L": 3,
+    "task": "put two soapbar in garbagecan.",
+    "initial_observation": "You are in the middle of a room. Looking quickly around you, you see a cabinet 4, a cabinet 3, a cabinet 2, a cabinet 1, a countertop 1, a garbagecan 1, a handtowelholder 2, a handtowelholder 1, a sinkbasin 2, a sinkbasin 1, a toilet 1, a toiletpaperhanger 1, and a towelholder 1.",
+    "prefix": [
+      {
+        "action": "go to countertop 1",
+        "observation": "You arrive at countertop 1. On the countertop 1, you see a candle 1, a soapbar 4, a soapbar 3, a soapbar 1, and a spraybottle 1."
+      },
+      {
+        "action": "take soapbar 1 from countertop 1",
+        "observation": "You pick up the soapbar 1 from the countertop 1."
+      },
+      {
+        "action": "go to countertop 1",
+        "observation": "Nothing happens."
+      }
+    ]
+  },
+  {
+    "sample_id": "sample_07",
+    "L": 0,
+    "task": "put some saltshaker on drawer.",
+    "initial_observation": "You are in the middle of a room. Looking quickly around you, you see a cabinet 6, a cabinet 5, a cabinet 4, a cabinet 3, a cabinet 2, a cabinet 1, a coffeemachine 1, a countertop 3, a countertop 2, a countertop 1, a drawer 3, a drawer 2, a drawer 1, a fridge 1, a garbagecan 1, a microwave 1, a shelf 3, a shelf 2, a shelf 1, a sinkbasin 1, a stoveburner 4, a stoveburner 3, a stoveburner 2, a stoveburner 1, and a toaster 1.",
+    "prefix": []
+  },
+  {
+    "sample_id": "sample_07",
+    "L": 1,
+    "task": "put some saltshaker on drawer.",
+    "initial_observation": "You are in the middle of a room. Looking quickly around you, you see a cabinet 6, a cabinet 5, a cabinet 4, a cabinet 3, a cabinet 2, a cabinet 1, a coffeemachine 1, a countertop 3, a countertop 2, a countertop 1, a drawer 3, a drawer 2, a drawer 1, a fridge 1, a garbagecan 1, a microwave 1, a shelf 3, a shelf 2, a shelf 1, a sinkbasin 1, a stoveburner 4, a stoveburner 3, a stoveburner 2, a stoveburner 1, and a toaster 1.",
+    "prefix": [
+      {
+        "action": "go to countertop 1",
+        "observation": "You arrive at countertop 1. On the countertop 1, you see a creditcard 3, a papertowelroll 1, a peppershaker 2, and a soapbottle 1."
+      }
+    ]
+  },
+  {
+    "sample_id": "sample_07",
+    "L": 2,
+    "task": "put some saltshaker on drawer.",
+    "initial_observation": "You are in the middle of a room. Looking quickly around you, you see a cabinet 6, a cabinet 5, a cabinet 4, a cabinet 3, a cabinet 2, a cabinet 1, a coffeemachine 1, a countertop 3, a countertop 2, a countertop 1, a drawer 3, a drawer 2, a drawer 1, a fridge 1, a garbagecan 1, a microwave 1, a shelf 3, a shelf 2, a shelf 1, a sinkbasin 1, a stoveburner 4, a stoveburner 3, a stoveburner 2, a stoveburner 1, and a toaster 1.",
+    "prefix": [
+      {
+        "action": "go to countertop 1",
+        "observation": "You arrive at countertop 1. On the countertop 1, you see a creditcard 3, a papertowelroll 1, a peppershaker 2, and a soapbottle 1."
+      },
+      {
+        "action": "go to countertop 2",
+        "observation": "You arrive at countertop 2. On the countertop 2, you see a bowl 3, a bread 2, a cellphone 1, a creditcard 1, a fork 2, a glassbottle 1, a knife 1, a potato 1, a spatula 1, a spoon 3, and a spoon 1."
+      }
+    ]
+  },
+  {
+    "sample_id": "sample_07",
+    "L": 3,
+    "task": "put some saltshaker on drawer.",
+    "initial_observation": "You are in the middle of a room. Looking quickly around you, you see a cabinet 6, a cabinet 5, a cabinet 4, a cabinet 3, a cabinet 2, a cabinet 1, a coffeemachine 1, a countertop 3, a countertop 2, a countertop 1, a drawer 3, a drawer 2, a drawer 1, a fridge 1, a garbagecan 1, a microwave 1, a shelf 3, a shelf 2, a shelf 1, a sinkbasin 1, a stoveburner 4, a stoveburner 3, a stoveburner 2, a stoveburner 1, and a toaster 1.",
+    "prefix": [
+      {
+        "action": "go to countertop 1",
+        "observation": "You arrive at countertop 1. On the countertop 1, you see a creditcard 3, a papertowelroll 1, a peppershaker 2, and a soapbottle 1."
+      },
+      {
+        "action": "go to countertop 2",
+        "observation": "You arrive at countertop 2. On the countertop 2, you see a bowl 3, a bread 2, a cellphone 1, a creditcard 1, a fork 2, a glassbottle 1, a knife 1, a potato 1, a spatula 1, a spoon 3, and a spoon 1."
+      },
+      {
+        "action": "go to shelf 1",
+        "observation": "You arrive at shelf 1. On the shelf 1, you see a mug 3."
+      }
+    ]
+  },
+  {
+    "sample_id": "sample_08",
+    "L": 0,
+    "task": "find two toiletpaper and put them in cabinet.",
+    "initial_observation": "You are in the middle of a room. Looking quickly around you, you see a cabinet 4, a cabinet 3, a cabinet 2, a cabinet 1, a countertop 1, a garbagecan 1, a handtowelholder 2, a handtowelholder 1, a sinkbasin 2, a sinkbasin 1, a toilet 1, a toiletpaperhanger 1, and a towelholder 1.",
+    "prefix": []
+  },
+  {
+    "sample_id": "sample_08",
+    "L": 1,
+    "task": "find two toiletpaper and put them in cabinet.",
+    "initial_observation": "You are in the middle of a room. Looking quickly around you, you see a cabinet 4, a cabinet 3, a cabinet 2, a cabinet 1, a countertop 1, a garbagecan 1, a handtowelholder 2, a handtowelholder 1, a sinkbasin 2, a sinkbasin 1, a toilet 1, a toiletpaperhanger 1, and a towelholder 1.",
+    "prefix": [
+      {
+        "action": "go to toiletpaperhanger 1",
+        "observation": "You arrive at toiletpaperhanger 1. On the toiletpaperhanger 1, you see nothing."
+      }
+    ]
+  },
+  {
+    "sample_id": "sample_08",
+    "L": 2,
+    "task": "find two toiletpaper and put them in cabinet.",
+    "initial_observation": "You are in the middle of a room. Looking quickly around you, you see a cabinet 4, a cabinet 3, a cabinet 2, a cabinet 1, a countertop 1, a garbagecan 1, a handtowelholder 2, a handtowelholder 1, a sinkbasin 2, a sinkbasin 1, a toilet 1, a toiletpaperhanger 1, and a towelholder 1.",
+    "prefix": [
+      {
+        "action": "go to toiletpaperhanger 1",
+        "observation": "You arrive at toiletpaperhanger 1. On the toiletpaperhanger 1, you see nothing."
+      },
+      {
+        "action": "go to toilet 1",
+        "observation": "You arrive at toilet 1. On the toilet 1, you see a soapbar 3, a soapbar 2, and a toiletpaper 3."
+      }
+    ]
+  },
+  {
+    "sample_id": "sample_08",
+    "L": 3,
+    "task": "find two toiletpaper and put them in cabinet.",
+    "initial_observation": "You are in the middle of a room. Looking quickly around you, you see a cabinet 4, a cabinet 3, a cabinet 2, a cabinet 1, a countertop 1, a garbagecan 1, a handtowelholder 2, a handtowelholder 1, a sinkbasin 2, a sinkbasin 1, a toilet 1, a toiletpaperhanger 1, and a towelholder 1.",
+    "prefix": [
+      {
+        "action": "go to toiletpaperhanger 1",
+        "observation": "You arrive at toiletpaperhanger 1. On the toiletpaperhanger 1, you see nothing."
+      },
+      {
+        "action": "go to toilet 1",
+        "observation": "You arrive at toilet 1. On the toilet 1, you see a soapbar 3, a soapbar 2, and a toiletpaper 3."
+      },
+      {
+        "action": "take toiletpaper 3 from toilet 1",
+        "observation": "You pick up the toiletpaper 3 from the toilet 1."
+      }
+    ]
+  },
+  {
+    "sample_id": "sample_09",
+    "L": 0,
+    "task": "put two soapbar in garbagecan.",
+    "initial_observation": "You are in the middle of a room. Looking quickly around you, you see a cabinet 4, a cabinet 3, a cabinet 2, a cabinet 1, a countertop 1, a garbagecan 1, a handtowelholder 2, a handtowelholder 1, a sinkbasin 2, a sinkbasin 1, a toilet 1, a toiletpaperhanger 1, and a towelholder 1.",
+    "prefix": []
+  },
+  {
+    "sample_id": "sample_09",
+    "L": 1,
+    "task": "put two soapbar in garbagecan.",
+    "initial_observation": "You are in the middle of a room. Looking quickly around you, you see a cabinet 4, a cabinet 3, a cabinet 2, a cabinet 1, a countertop 1, a garbagecan 1, a handtowelholder 2, a handtowelholder 1, a sinkbasin 2, a sinkbasin 1, a toilet 1, a toiletpaperhanger 1, and a towelholder 1.",
+    "prefix": [
+      {
+        "action": "go to countertop 1",
+        "observation": "You arrive at countertop 1. On the countertop 1, you see a candle 1, a soapbar 2, a soapbar 1, a soapbottle 1, and a spraybottle 3."
+      }
+    ]
+  },
+  {
+    "sample_id": "sample_09",
+    "L": 2,
+    "task": "put two soapbar in garbagecan.",
+    "initial_observation": "You are in the middle of a room. Looking quickly around you, you see a cabinet 4, a cabinet 3, a cabinet 2, a cabinet 1, a countertop 1, a garbagecan 1, a handtowelholder 2, a handtowelholder 1, a sinkbasin 2, a sinkbasin 1, a toilet 1, a toiletpaperhanger 1, and a towelholder 1.",
+    "prefix": [
+      {
+        "action": "go to countertop 1",
+        "observation": "You arrive at countertop 1. On the countertop 1, you see a candle 1, a soapbar 2, a soapbar 1, a soapbottle 1, and a spraybottle 3."
+      },
+      {
+        "action": "take soapbar 1 from countertop 1",
+        "observation": "You pick up the soapbar 1 from the countertop 1."
+      }
+    ]
+  },
+  {
+    "sample_id": "sample_09",
+    "L": 3,
+    "task": "put two soapbar in garbagecan.",
+    "initial_observation": "You are in the middle of a room. Looking quickly around you, you see a cabinet 4, a cabinet 3, a cabinet 2, a cabinet 1, a countertop 1, a garbagecan 1, a handtowelholder 2, a handtowelholder 1, a sinkbasin 2, a sinkbasin 1, a toilet 1, a toiletpaperhanger 1, and a towelholder 1.",
+    "prefix": [
+      {
+        "action": "go to countertop 1",
+        "observation": "You arrive at countertop 1. On the countertop 1, you see a candle 1, a soapbar 2, a soapbar 1, a soapbottle 1, and a spraybottle 3."
+      },
+      {
+        "action": "take soapbar 1 from countertop 1",
+        "observation": "You pick up the soapbar 1 from the countertop 1."
+      },
+      {
+        "action": "go to sinkbasin 1",
+        "observation": "You arrive at sinkbasin 1. On the sinkbasin 1, you see nothing."
+      }
+    ]
+  },
+  {
+    "sample_id": "sample_10",
+    "L": 0,
+    "task": "put a soapbottle in toilet.",
+    "initial_observation": "You are in the middle of a room. Looking quickly around you, you see a cabinet 4, a cabinet 3, a cabinet 2, a cabinet 1, a countertop 1, a garbagecan 1, a handtowelholder 2, a handtowelholder 1, a sinkbasin 2, a sinkbasin 1, a toilet 1, a toiletpaperhanger 1, and a towelholder 1.",
+    "prefix": []
+  },
+  {
+    "sample_id": "sample_10",
+    "L": 1,
+    "task": "put a soapbottle in toilet.",
+    "initial_observation": "You are in the middle of a room. Looking quickly around you, you see a cabinet 4, a cabinet 3, a cabinet 2, a cabinet 1, a countertop 1, a garbagecan 1, a handtowelholder 2, a handtowelholder 1, a sinkbasin 2, a sinkbasin 1, a toilet 1, a toiletpaperhanger 1, and a towelholder 1.",
+    "prefix": [
+      {
+        "action": "go to cabinet 1",
+        "observation": "You arrive at cabinet 1. The cabinet 1 is closed."
+      }
+    ]
+  },
+  {
+    "sample_id": "sample_10",
+    "L": 2,
+    "task": "put a soapbottle in toilet.",
+    "initial_observation": "You are in the middle of a room. Looking quickly around you, you see a cabinet 4, a cabinet 3, a cabinet 2, a cabinet 1, a countertop 1, a garbagecan 1, a handtowelholder 2, a handtowelholder 1, a sinkbasin 2, a sinkbasin 1, a toilet 1, a toiletpaperhanger 1, and a towelholder 1.",
+    "prefix": [
+      {
+        "action": "go to cabinet 1",
+        "observation": "You arrive at cabinet 1. The cabinet 1 is closed."
+      },
+      {
+        "action": "open cabinet 1",
+        "observation": "You open the cabinet 1. The cabinet 1 is open. In it, you see a candle 2, and a cloth 2."
+      }
+    ]
+  },
+  {
+    "sample_id": "sample_10",
+    "L": 3,
+    "task": "put a soapbottle in toilet.",
+    "initial_observation": "You are in the middle of a room. Looking quickly around you, you see a cabinet 4, a cabinet 3, a cabinet 2, a cabinet 1, a countertop 1, a garbagecan 1, a handtowelholder 2, a handtowelholder 1, a sinkbasin 2, a sinkbasin 1, a toilet 1, a toiletpaperhanger 1, and a towelholder 1.",
+    "prefix": [
+      {
+        "action": "go to cabinet 1",
+        "observation": "You arrive at cabinet 1. The cabinet 1 is closed."
+      },
+      {
+        "action": "open cabinet 1",
+        "observation": "You open the cabinet 1. The cabinet 1 is open. In it, you see a candle 2, and a cloth 2."
+      },
+      {
+        "action": "go to cabinet 2",
+        "observation": "You arrive at cabinet 2. The cabinet 2 is closed."
+      }
+    ]
+  },
+  {
+    "sample_id": "sample_11",
+    "L": 0,
+    "task": "put a hot cup in cabinet.",
+    "initial_observation": "You are in the middle of a room. Looking quickly around you, you see a cabinet 6, a cabinet 5, a cabinet 4, a cabinet 3, a cabinet 2, a cabinet 1, a coffeemachine 1, a countertop 3, a countertop 2, a countertop 1, a drawer 3, a drawer 2, a drawer 1, a fridge 1, a garbagecan 1, a microwave 1, a shelf 3, a shelf 2, a shelf 1, a sinkbasin 1, a stoveburner 4, a stoveburner 3, a stoveburner 2, a stoveburner 1, and a toaster 1.",
+    "prefix": []
+  },
+  {
+    "sample_id": "sample_11",
+    "L": 1,
+    "task": "put a hot cup in cabinet.",
+    "initial_observation": "You are in the middle of a room. Looking quickly around you, you see a cabinet 6, a cabinet 5, a cabinet 4, a cabinet 3, a cabinet 2, a cabinet 1, a coffeemachine 1, a countertop 3, a countertop 2, a countertop 1, a drawer 3, a drawer 2, a drawer 1, a fridge 1, a garbagecan 1, a microwave 1, a shelf 3, a shelf 2, a shelf 1, a sinkbasin 1, a stoveburner 4, a stoveburner 3, a stoveburner 2, a stoveburner 1, and a toaster 1.",
+    "prefix": [
+      {
+        "action": "go to fridge 1",
+        "observation": "You arrive at fridge 1. The fridge 1 is closed."
+      }
+    ]
+  },
+  {
+    "sample_id": "sample_11",
+    "L": 2,
+    "task": "put a hot cup in cabinet.",
+    "initial_observation": "You are in the middle of a room. Looking quickly around you, you see a cabinet 6, a cabinet 5, a cabinet 4, a cabinet 3, a cabinet 2, a cabinet 1, a coffeemachine 1, a countertop 3, a countertop 2, a countertop 1, a drawer 3, a drawer 2, a drawer 1, a fridge 1, a garbagecan 1, a microwave 1, a shelf 3, a shelf 2, a shelf 1, a sinkbasin 1, a stoveburner 4, a stoveburner 3, a stoveburner 2, a stoveburner 1, and a toaster 1.",
+    "prefix": [
+      {
+        "action": "go to fridge 1",
+        "observation": "You arrive at fridge 1. The fridge 1 is closed."
+      },
+      {
+        "action": "open fridge 1",
+        "observation": "You open the fridge 1. The fridge 1 is open. In it, you see a apple 2, a apple 1, a bread 2, a cup 3, a mug 2, a potato 2, and a tomato 1."
+      }
+    ]
+  },
+  {
+    "sample_id": "sample_11",
+    "L": 3,
+    "task": "put a hot cup in cabinet.",
+    "initial_observation": "You are in the middle of a room. Looking quickly around you, you see a cabinet 6, a cabinet 5, a cabinet 4, a cabinet 3, a cabinet 2, a cabinet 1, a coffeemachine 1, a countertop 3, a countertop 2, a countertop 1, a drawer 3, a drawer 2, a drawer 1, a fridge 1, a garbagecan 1, a microwave 1, a shelf 3, a shelf 2, a shelf 1, a sinkbasin 1, a stoveburner 4, a stoveburner 3, a stoveburner 2, a stoveburner 1, and a toaster 1.",
+    "prefix": [
+      {
+        "action": "go to fridge 1",
+        "observation": "You arrive at fridge 1. The fridge 1 is closed."
+      },
+      {
+        "action": "open fridge 1",
+        "observation": "You open the fridge 1. The fridge 1 is open. In it, you see a apple 2, a apple 1, a bread 2, a cup 3, a mug 2, a potato 2, and a tomato 1."
+      },
+      {
+        "action": "take cup 3 from fridge 1",
+        "observation": "You pick up the cup 3 from the fridge 1."
+      }
+    ]
+  },
+  {
+    "sample_id": "sample_12",
+    "L": 0,
+    "task": "examine the pencil with the desklamp.",
+    "initial_observation": "You are in the middle of a room. Looking quickly around you, you see a bed 1, a desk 2, a desk 1, a drawer 6, a drawer 5, a drawer 4, a drawer 3, a drawer 2, a drawer 1, a garbagecan 1, a laundryhamper 1, a safe 1, a shelf 6, a shelf 5, a shelf 4, a shelf 3, a shelf 2, and a shelf 1.",
+    "prefix": []
+  },
+  {
+    "sample_id": "sample_12",
+    "L": 1,
+    "task": "examine the pencil with the desklamp.",
+    "initial_observation": "You are in the middle of a room. Looking quickly around you, you see a bed 1, a desk 2, a desk 1, a drawer 6, a drawer 5, a drawer 4, a drawer 3, a drawer 2, a drawer 1, a garbagecan 1, a laundryhamper 1, a safe 1, a shelf 6, a shelf 5, a shelf 4, a shelf 3, a shelf 2, and a shelf 1.",
+    "prefix": [
+      {
+        "action": "go to desk 1",
+        "observation": "You arrive at desk 1. On the desk 1, you see a alarmclock 2, a cellphone 2, a desklamp 1, a keychain 2, a mug 1, and a pencil 3."
+      }
+    ]
+  },
+  {
+    "sample_id": "sample_12",
+    "L": 2,
+    "task": "examine the pencil with the desklamp.",
+    "initial_observation": "You are in the middle of a room. Looking quickly around you, you see a bed 1, a desk 2, a desk 1, a drawer 6, a drawer 5, a drawer 4, a drawer 3, a drawer 2, a drawer 1, a garbagecan 1, a laundryhamper 1, a safe 1, a shelf 6, a shelf 5, a shelf 4, a shelf 3, a shelf 2, and a shelf 1.",
+    "prefix": [
+      {
+        "action": "go to desk 1",
+        "observation": "You arrive at desk 1. On the desk 1, you see a alarmclock 2, a cellphone 2, a desklamp 1, a keychain 2, a mug 1, and a pencil 3."
+      },
+      {
+        "action": "use desklamp 1",
+        "observation": "You turn on the desklamp 1."
+      }
+    ]
+  },
+  {
+    "sample_id": "sample_12",
+    "L": 3,
+    "task": "examine the pencil with the desklamp.",
+    "initial_observation": "You are in the middle of a room. Looking quickly around you, you see a bed 1, a desk 2, a desk 1, a drawer 6, a drawer 5, a drawer 4, a drawer 3, a drawer 2, a drawer 1, a garbagecan 1, a laundryhamper 1, a safe 1, a shelf 6, a shelf 5, a shelf 4, a shelf 3, a shelf 2, and a shelf 1.",
+    "prefix": [
+      {
+        "action": "go to desk 1",
+        "observation": "You arrive at desk 1. On the desk 1, you see a alarmclock 2, a cellphone 2, a desklamp 1, a keychain 2, a mug 1, and a pencil 3."
+      },
+      {
+        "action": "use desklamp 1",
+        "observation": "You turn on the desklamp 1."
+      },
+      {
+        "action": "examine pencil 3 with desklamp 1",
+        "observation": "Nothing happens."
+      }
+    ]
+  },
+  {
+    "sample_id": "sample_13",
+    "L": 0,
+    "task": "examine the book with the desklamp.",
+    "initial_observation": "You are in the middle of a room. Looking quickly around you, you see a bed 1, a desk 2, a desk 1, a drawer 6, a drawer 5, a drawer 4, a drawer 3, a drawer 2, a drawer 1, a garbagecan 1, a laundryhamper 1, a safe 1, a shelf 6, a shelf 5, a shelf 4, a shelf 3, a shelf 2, and a shelf 1.",
+    "prefix": []
+  },
+  {
+    "sample_id": "sample_13",
+    "L": 1,
+    "task": "examine the book with the desklamp.",
+    "initial_observation": "You are in the middle of a room. Looking quickly around you, you see a bed 1, a desk 2, a desk 1, a drawer 6, a drawer 5, a drawer 4, a drawer 3, a drawer 2, a drawer 1, a garbagecan 1, a laundryhamper 1, a safe 1, a shelf 6, a shelf 5, a shelf 4, a shelf 3, a shelf 2, and a shelf 1.",
+    "prefix": [
+      {
+        "action": "go to desk 1",
+        "observation": "You arrive at desk 1. On the desk 1, you see a alarmclock 2, a creditcard 1, a desklamp 1, and a keychain 2."
+      }
+    ]
+  },
+  {
+    "sample_id": "sample_13",
+    "L": 2,
+    "task": "examine the book with the desklamp.",
+    "initial_observation": "You are in the middle of a room. Looking quickly around you, you see a bed 1, a desk 2, a desk 1, a drawer 6, a drawer 5, a drawer 4, a drawer 3, a drawer 2, a drawer 1, a garbagecan 1, a laundryhamper 1, a safe 1, a shelf 6, a shelf 5, a shelf 4, a shelf 3, a shelf 2, and a shelf 1.",
+    "prefix": [
+      {
+        "action": "go to desk 1",
+        "observation": "You arrive at desk 1. On the desk 1, you see a alarmclock 2, a creditcard 1, a desklamp 1, and a keychain 2."
+      },
+      {
+        "action": "open drawer 1",
+        "observation": "Nothing happens."
+      }
+    ]
+  },
+  {
+    "sample_id": "sample_13",
+    "L": 3,
+    "task": "examine the book with the desklamp.",
+    "initial_observation": "You are in the middle of a room. Looking quickly around you, you see a bed 1, a desk 2, a desk 1, a drawer 6, a drawer 5, a drawer 4, a drawer 3, a drawer 2, a drawer 1, a garbagecan 1, a laundryhamper 1, a safe 1, a shelf 6, a shelf 5, a shelf 4, a shelf 3, a shelf 2, and a shelf 1.",
+    "prefix": [
+      {
+        "action": "go to desk 1",
+        "observation": "You arrive at desk 1. On the desk 1, you see a alarmclock 2, a creditcard 1, a desklamp 1, and a keychain 2."
+      },
+      {
+        "action": "open drawer 1",
+        "observation": "Nothing happens."
+      },
+      {
+        "action": "open drawer 2",
+        "observation": "Nothing happens."
+      }
+    ]
+  },
+  {
+    "sample_id": "sample_14",
+    "L": 0,
+    "task": "put a peppershaker in drawer.",
+    "initial_observation": "You are in the middle of a room. Looking quickly around you, you see a cabinet 6, a cabinet 5, a cabinet 4, a cabinet 3, a cabinet 2, a cabinet 1, a coffeemachine 1, a countertop 3, a countertop 2, a countertop 1, a drawer 3, a drawer 2, a drawer 1, a fridge 1, a garbagecan 1, a microwave 1, a shelf 3, a shelf 2, a shelf 1, a sinkbasin 1, a stoveburner 4, a stoveburner 3, a stoveburner 2, a stoveburner 1, and a toaster 1.",
+    "prefix": []
+  },
+  {
+    "sample_id": "sample_14",
+    "L": 1,
+    "task": "put a peppershaker in drawer.",
+    "initial_observation": "You are in the middle of a room. Looking quickly around you, you see a cabinet 6, a cabinet 5, a cabinet 4, a cabinet 3, a cabinet 2, a cabinet 1, a coffeemachine 1, a countertop 3, a countertop 2, a countertop 1, a drawer 3, a drawer 2, a drawer 1, a fridge 1, a garbagecan 1, a microwave 1, a shelf 3, a shelf 2, a shelf 1, a sinkbasin 1, a stoveburner 4, a stoveburner 3, a stoveburner 2, a stoveburner 1, and a toaster 1.",
+    "prefix": [
+      {
+        "action": "go to cabinet 1",
+        "observation": "You arrive at cabinet 1. On the cabinet 1, you see nothing."
+      }
+    ]
+  },
+  {
+    "sample_id": "sample_14",
+    "L": 2,
+    "task": "put a peppershaker in drawer.",
+    "initial_observation": "You are in the middle of a room. Looking quickly around you, you see a cabinet 6, a cabinet 5, a cabinet 4, a cabinet 3, a cabinet 2, a cabinet 1, a coffeemachine 1, a countertop 3, a countertop 2, a countertop 1, a drawer 3, a drawer 2, a drawer 1, a fridge 1, a garbagecan 1, a microwave 1, a shelf 3, a shelf 2, a shelf 1, a sinkbasin 1, a stoveburner 4, a stoveburner 3, a stoveburner 2, a stoveburner 1, and a toaster 1.",
+    "prefix": [
+      {
+        "action": "go to cabinet 1",
+        "observation": "You arrive at cabinet 1. On the cabinet 1, you see nothing."
+      },
+      {
+        "action": "go to cabinet 2",
+        "observation": "You arrive at cabinet 2. The cabinet 2 is closed."
+      }
+    ]
+  },
+  {
+    "sample_id": "sample_14",
+    "L": 3,
+    "task": "put a peppershaker in drawer.",
+    "initial_observation": "You are in the middle of a room. Looking quickly around you, you see a cabinet 6, a cabinet 5, a cabinet 4, a cabinet 3, a cabinet 2, a cabinet 1, a coffeemachine 1, a countertop 3, a countertop 2, a countertop 1, a drawer 3, a drawer 2, a drawer 1, a fridge 1, a garbagecan 1, a microwave 1, a shelf 3, a shelf 2, a shelf 1, a sinkbasin 1, a stoveburner 4, a stoveburner 3, a stoveburner 2, a stoveburner 1, and a toaster 1.",
+    "prefix": [
+      {
+        "action": "go to cabinet 1",
+        "observation": "You arrive at cabinet 1. On the cabinet 1, you see nothing."
+      },
+      {
+        "action": "go to cabinet 2",
+        "observation": "You arrive at cabinet 2. The cabinet 2 is closed."
+      },
+      {
+        "action": "open cabinet 2",
+        "observation": "You open the cabinet 2. The cabinet 2 is open. In it, you see a plate 1."
+      }
+    ]
+  },
+  {
+    "sample_id": "sample_15",
+    "L": 0,
+    "task": "put some vase on safe.",
+    "initial_observation": "You are in the middle of a room. Looking quickly around you, you see a armchair 1, a cabinet 4, a cabinet 3, a cabinet 2, a cabinet 1, a drawer 5, a drawer 4, a drawer 3, a drawer 2, a drawer 1, a dresser 1, a garbagecan 1, a safe 1, a shelf 12, a shelf 11, a shelf 10, a shelf 9, a shelf 8, a shelf 7, a shelf 6, a shelf 5, a shelf 4, a shelf 3, a shelf 2, a shelf 1, a sidetable 1, and a sofa 1.",
+    "prefix": []
+  },
+  {
+    "sample_id": "sample_15",
+    "L": 1,
+    "task": "put some vase on safe.",
+    "initial_observation": "You are in the middle of a room. Looking quickly around you, you see a armchair 1, a cabinet 4, a cabinet 3, a cabinet 2, a cabinet 1, a drawer 5, a drawer 4, a drawer 3, a drawer 2, a drawer 1, a dresser 1, a garbagecan 1, a safe 1, a shelf 12, a shelf 11, a shelf 10, a shelf 9, a shelf 8, a shelf 7, a shelf 6, a shelf 5, a shelf 4, a shelf 3, a shelf 2, a shelf 1, a sidetable 1, and a sofa 1.",
+    "prefix": [
+      {
+        "action": "go to shelf 1",
+        "observation": "You arrive at shelf 1. On the shelf 1, you see nothing."
+      }
+    ]
+  },
+  {
+    "sample_id": "sample_15",
+    "L": 2,
+    "task": "put some vase on safe.",
+    "initial_observation": "You are in the middle of a room. Looking quickly around you, you see a armchair 1, a cabinet 4, a cabinet 3, a cabinet 2, a cabinet 1, a drawer 5, a drawer 4, a drawer 3, a drawer 2, a drawer 1, a dresser 1, a garbagecan 1, a safe 1, a shelf 12, a shelf 11, a shelf 10, a shelf 9, a shelf 8, a shelf 7, a shelf 6, a shelf 5, a shelf 4, a shelf 3, a shelf 2, a shelf 1, a sidetable 1, and a sofa 1.",
+    "prefix": [
+      {
+        "action": "go to shelf 1",
+        "observation": "You arrive at shelf 1. On the shelf 1, you see nothing."
+      },
+      {
+        "action": "go to shelf 2",
+        "observation": "You arrive at shelf 2. On the shelf 2, you see nothing."
+      }
+    ]
+  },
+  {
+    "sample_id": "sample_15",
+    "L": 3,
+    "task": "put some vase on safe.",
+    "initial_observation": "You are in the middle of a room. Looking quickly around you, you see a armchair 1, a cabinet 4, a cabinet 3, a cabinet 2, a cabinet 1, a drawer 5, a drawer 4, a drawer 3, a drawer 2, a drawer 1, a dresser 1, a garbagecan 1, a safe 1, a shelf 12, a shelf 11, a shelf 10, a shelf 9, a shelf 8, a shelf 7, a shelf 6, a shelf 5, a shelf 4, a shelf 3, a shelf 2, a shelf 1, a sidetable 1, and a sofa 1.",
+    "prefix": [
+      {
+        "action": "go to shelf 1",
+        "observation": "You arrive at shelf 1. On the shelf 1, you see nothing."
+      },
+      {
+        "action": "go to shelf 2",
+        "observation": "You arrive at shelf 2. On the shelf 2, you see nothing."
+      },
+      {
+        "action": "go to shelf 3",
+        "observation": "Nothing happens."
+      }
+    ]
+  },
+  {
+    "sample_id": "sample_16",
+    "L": 0,
+    "task": "clean some bowl and put it in cabinet.",
+    "initial_observation": "You are in the middle of a room. Looking quickly around you, you see a cabinet 6, a cabinet 5, a cabinet 4, a cabinet 3, a cabinet 2, a cabinet 1, a coffeemachine 1, a countertop 3, a countertop 2, a countertop 1, a drawer 3, a drawer 2, a drawer 1, a fridge 1, a garbagecan 1, a microwave 1, a shelf 3, a shelf 2, a shelf 1, a sinkbasin 1, a stoveburner 4, a stoveburner 3, a stoveburner 2, a stoveburner 1, and a toaster 1.",
+    "prefix": []
+  },
+  {
+    "sample_id": "sample_16",
+    "L": 1,
+    "task": "clean some bowl and put it in cabinet.",
+    "initial_observation": "You are in the middle of a room. Looking quickly around you, you see a cabinet 6, a cabinet 5, a cabinet 4, a cabinet 3, a cabinet 2, a cabinet 1, a coffeemachine 1, a countertop 3, a countertop 2, a countertop 1, a drawer 3, a drawer 2, a drawer 1, a fridge 1, a garbagecan 1, a microwave 1, a shelf 3, a shelf 2, a shelf 1, a sinkbasin 1, a stoveburner 4, a stoveburner 3, a stoveburner 2, a stoveburner 1, and a toaster 1.",
+    "prefix": [
+      {
+        "action": "go to countertop 1",
+        "observation": "You arrive at countertop 1. On the countertop 1, you see a apple 3, a egg 2, and a vase 2."
+      }
+    ]
+  },
+  {
+    "sample_id": "sample_16",
+    "L": 2,
+    "task": "clean some bowl and put it in cabinet.",
+    "initial_observation": "You are in the middle of a room. Looking quickly around you, you see a cabinet 6, a cabinet 5, a cabinet 4, a cabinet 3, a cabinet 2, a cabinet 1, a coffeemachine 1, a countertop 3, a countertop 2, a countertop 1, a drawer 3, a drawer 2, a drawer 1, a fridge 1, a garbagecan 1, a microwave 1, a shelf 3, a shelf 2, a shelf 1, a sinkbasin 1, a stoveburner 4, a stoveburner 3, a stoveburner 2, a stoveburner 1, and a toaster 1.",
+    "prefix": [
+      {
+        "action": "go to countertop 1",
+        "observation": "You arrive at countertop 1. On the countertop 1, you see a apple 3, a egg 2, and a vase 2."
+      },
+      {
+        "action": "go to cabinet 1",
+        "observation": "You arrive at cabinet 1. On the cabinet 1, you see nothing."
+      }
+    ]
+  },
+  {
+    "sample_id": "sample_16",
+    "L": 3,
+    "task": "clean some bowl and put it in cabinet.",
+    "initial_observation": "You are in the middle of a room. Looking quickly around you, you see a cabinet 6, a cabinet 5, a cabinet 4, a cabinet 3, a cabinet 2, a cabinet 1, a coffeemachine 1, a countertop 3, a countertop 2, a countertop 1, a drawer 3, a drawer 2, a drawer 1, a fridge 1, a garbagecan 1, a microwave 1, a shelf 3, a shelf 2, a shelf 1, a sinkbasin 1, a stoveburner 4, a stoveburner 3, a stoveburner 2, a stoveburner 1, and a toaster 1.",
+    "prefix": [
+      {
+        "action": "go to countertop 1",
+        "observation": "You arrive at countertop 1. On the countertop 1, you see a apple 3, a egg 2, and a vase 2."
+      },
+      {
+        "action": "go to cabinet 1",
+        "observation": "You arrive at cabinet 1. On the cabinet 1, you see nothing."
+      },
+      {
+        "action": "go to fridge 1",
+        "observation": "You arrive at fridge 1. The fridge 1 is closed."
+      }
+    ]
+  },
+  {
+    "sample_id": "sample_17",
+    "L": 0,
+    "task": "examine the mug with the desklamp.",
+    "initial_observation": "You are in the middle of a room. Looking quickly around you, you see a bed 1, a desk 2, a desk 1, a drawer 6, a drawer 5, a drawer 4, a drawer 3, a drawer 2, a drawer 1, a garbagecan 1, a laundryhamper 1, a safe 1, a shelf 6, a shelf 5, a shelf 4, a shelf 3, a shelf 2, and a shelf 1.",
+    "prefix": []
+  },
+  {
+    "sample_id": "sample_17",
+    "L": 1,
+    "task": "examine the mug with the desklamp.",
+    "initial_observation": "You are in the middle of a room. Looking quickly around you, you see a bed 1, a desk 2, a desk 1, a drawer 6, a drawer 5, a drawer 4, a drawer 3, a drawer 2, a drawer 1, a garbagecan 1, a laundryhamper 1, a safe 1, a shelf 6, a shelf 5, a shelf 4, a shelf 3, a shelf 2, and a shelf 1.",
+    "prefix": [
+      {
+        "action": "go to desk 1",
+        "observation": "You arrive at desk 1. On the desk 1, you see a creditcard 3, a desklamp 1, a laptop 2, a mug 1, a pen 1, and a pencil 1."
+      }
+    ]
+  },
+  {
+    "sample_id": "sample_17",
+    "L": 2,
+    "task": "examine the mug with the desklamp.",
+    "initial_observation": "You are in the middle of a room. Looking quickly around you, you see a bed 1, a desk 2, a desk 1, a drawer 6, a drawer 5, a drawer 4, a drawer 3, a drawer 2, a drawer 1, a garbagecan 1, a laundryhamper 1, a safe 1, a shelf 6, a shelf 5, a shelf 4, a shelf 3, a shelf 2, and a shelf 1.",
+    "prefix": [
+      {
+        "action": "go to desk 1",
+        "observation": "You arrive at desk 1. On the desk 1, you see a creditcard 3, a desklamp 1, a laptop 2, a mug 1, a pen 1, and a pencil 1."
+      },
+      {
+        "action": "use desklamp 1",
+        "observation": "You turn on the desklamp 1."
+      }
+    ]
+  },
+  {
+    "sample_id": "sample_17",
+    "L": 3,
+    "task": "examine the mug with the desklamp.",
+    "initial_observation": "You are in the middle of a room. Looking quickly around you, you see a bed 1, a desk 2, a desk 1, a drawer 6, a drawer 5, a drawer 4, a drawer 3, a drawer 2, a drawer 1, a garbagecan 1, a laundryhamper 1, a safe 1, a shelf 6, a shelf 5, a shelf 4, a shelf 3, a shelf 2, and a shelf 1.",
+    "prefix": [
+      {
+        "action": "go to desk 1",
+        "observation": "You arrive at desk 1. On the desk 1, you see a creditcard 3, a desklamp 1, a laptop 2, a mug 1, a pen 1, and a pencil 1."
+      },
+      {
+        "action": "use desklamp 1",
+        "observation": "You turn on the desklamp 1."
+      },
+      {
+        "action": "examine mug 1 with desklamp 1",
+        "observation": "Nothing happens."
+      }
+    ]
+  },
+  {
+    "sample_id": "sample_18",
+    "L": 0,
+    "task": "cool some mug and put it in cabinet.",
+    "initial_observation": "You are in the middle of a room. Looking quickly around you, you see a cabinet 6, a cabinet 5, a cabinet 4, a cabinet 3, a cabinet 2, a cabinet 1, a coffeemachine 1, a countertop 3, a countertop 2, a countertop 1, a drawer 3, a drawer 2, a drawer 1, a fridge 1, a garbagecan 1, a microwave 1, a shelf 3, a shelf 2, a shelf 1, a sinkbasin 1, a stoveburner 4, a stoveburner 3, a stoveburner 2, a stoveburner 1, and a toaster 1.",
+    "prefix": []
+  },
+  {
+    "sample_id": "sample_18",
+    "L": 1,
+    "task": "cool some mug and put it in cabinet.",
+    "initial_observation": "You are in the middle of a room. Looking quickly around you, you see a cabinet 6, a cabinet 5, a cabinet 4, a cabinet 3, a cabinet 2, a cabinet 1, a coffeemachine 1, a countertop 3, a countertop 2, a countertop 1, a drawer 3, a drawer 2, a drawer 1, a fridge 1, a garbagecan 1, a microwave 1, a shelf 3, a shelf 2, a shelf 1, a sinkbasin 1, a stoveburner 4, a stoveburner 3, a stoveburner 2, a stoveburner 1, and a toaster 1.",
+    "prefix": [
+      {
+        "action": "go to countertop 1",
+        "observation": "You arrive at countertop 1. On the countertop 1, you see a fork 3, a mug 2, a peppershaker 3, a soapbottle 3, a soapbottle 2, and a spatula 2."
+      }
+    ]
+  },
+  {
+    "sample_id": "sample_18",
+    "L": 2,
+    "task": "cool some mug and put it in cabinet.",
+    "initial_observation": "You are in the middle of a room. Looking quickly around you, you see a cabinet 6, a cabinet 5, a cabinet 4, a cabinet 3, a cabinet 2, a cabinet 1, a coffeemachine 1, a countertop 3, a countertop 2, a countertop 1, a drawer 3, a drawer 2, a drawer 1, a fridge 1, a garbagecan 1, a microwave 1, a shelf 3, a shelf 2, a shelf 1, a sinkbasin 1, a stoveburner 4, a stoveburner 3, a stoveburner 2, a stoveburner 1, and a toaster 1.",
+    "prefix": [
+      {
+        "action": "go to countertop 1",
+        "observation": "You arrive at countertop 1. On the countertop 1, you see a fork 3, a mug 2, a peppershaker 3, a soapbottle 3, a soapbottle 2, and a spatula 2."
+      },
+      {
+        "action": "take mug 2 from countertop 1",
+        "observation": "You pick up the mug 2 from the countertop 1."
+      }
+    ]
+  },
+  {
+    "sample_id": "sample_18",
+    "L": 3,
+    "task": "cool some mug and put it in cabinet.",
+    "initial_observation": "You are in the middle of a room. Looking quickly around you, you see a cabinet 6, a cabinet 5, a cabinet 4, a cabinet 3, a cabinet 2, a cabinet 1, a coffeemachine 1, a countertop 3, a countertop 2, a countertop 1, a drawer 3, a drawer 2, a drawer 1, a fridge 1, a garbagecan 1, a microwave 1, a shelf 3, a shelf 2, a shelf 1, a sinkbasin 1, a stoveburner 4, a stoveburner 3, a stoveburner 2, a stoveburner 1, and a toaster 1.",
+    "prefix": [
+      {
+        "action": "go to countertop 1",
+        "observation": "You arrive at countertop 1. On the countertop 1, you see a fork 3, a mug 2, a peppershaker 3, a soapbottle 3, a soapbottle 2, and a spatula 2."
+      },
+      {
+        "action": "take mug 2 from countertop 1",
+        "observation": "You pick up the mug 2 from the countertop 1."
+      },
+      {
+        "action": "go to fridge 1",
+        "observation": "You arrive at fridge 1. The fridge 1 is closed."
+      }
+    ]
+  },
+  {
+    "sample_id": "sample_19",
+    "L": 0,
+    "task": "heat some apple and put it in fridge.",
+    "initial_observation": "You are in the middle of a room. Looking quickly around you, you see a cabinet 6, a cabinet 5, a cabinet 4, a cabinet 3, a cabinet 2, a cabinet 1, a coffeemachine 1, a countertop 3, a countertop 2, a countertop 1, a drawer 3, a drawer 2, a drawer 1, a fridge 1, a garbagecan 1, a microwave 1, a shelf 3, a shelf 2, a shelf 1, a sinkbasin 1, a stoveburner 4, a stoveburner 3, a stoveburner 2, a stoveburner 1, and a toaster 1.",
+    "prefix": []
+  },
+  {
+    "sample_id": "sample_19",
+    "L": 1,
+    "task": "heat some apple and put it in fridge.",
+    "initial_observation": "You are in the middle of a room. Looking quickly around you, you see a cabinet 6, a cabinet 5, a cabinet 4, a cabinet 3, a cabinet 2, a cabinet 1, a coffeemachine 1, a countertop 3, a countertop 2, a countertop 1, a drawer 3, a drawer 2, a drawer 1, a fridge 1, a garbagecan 1, a microwave 1, a shelf 3, a shelf 2, a shelf 1, a sinkbasin 1, a stoveburner 4, a stoveburner 3, a stoveburner 2, a stoveburner 1, and a toaster 1.",
+    "prefix": [
+      {
+        "action": "go to sinkbasin 1",
+        "observation": "You arrive at sinkbasin 1. On the sinkbasin 1, you see a apple 3, and a spoon 1."
+      }
+    ]
+  },
+  {
+    "sample_id": "sample_19",
+    "L": 2,
+    "task": "heat some apple and put it in fridge.",
+    "initial_observation": "You are in the middle of a room. Looking quickly around you, you see a cabinet 6, a cabinet 5, a cabinet 4, a cabinet 3, a cabinet 2, a cabinet 1, a coffeemachine 1, a countertop 3, a countertop 2, a countertop 1, a drawer 3, a drawer 2, a drawer 1, a fridge 1, a garbagecan 1, a microwave 1, a shelf 3, a shelf 2, a shelf 1, a sinkbasin 1, a stoveburner 4, a stoveburner 3, a stoveburner 2, a stoveburner 1, and a toaster 1.",
+    "prefix": [
+      {
+        "action": "go to sinkbasin 1",
+        "observation": "You arrive at sinkbasin 1. On the sinkbasin 1, you see a apple 3, and a spoon 1."
+      },
+      {
+        "action": "take apple 3 from sinkbasin 1",
+        "observation": "You pick up the apple 3 from the sinkbasin 1."
+      }
+    ]
+  },
+  {
+    "sample_id": "sample_19",
+    "L": 3,
+    "task": "heat some apple and put it in fridge.",
+    "initial_observation": "You are in the middle of a room. Looking quickly around you, you see a cabinet 6, a cabinet 5, a cabinet 4, a cabinet 3, a cabinet 2, a cabinet 1, a coffeemachine 1, a countertop 3, a countertop 2, a countertop 1, a drawer 3, a drawer 2, a drawer 1, a fridge 1, a garbagecan 1, a microwave 1, a shelf 3, a shelf 2, a shelf 1, a sinkbasin 1, a stoveburner 4, a stoveburner 3, a stoveburner 2, a stoveburner 1, and a toaster 1.",
+    "prefix": [
+      {
+        "action": "go to sinkbasin 1",
+        "observation": "You arrive at sinkbasin 1. On the sinkbasin 1, you see a apple 3, and a spoon 1."
+      },
+      {
+        "action": "take apple 3 from sinkbasin 1",
+        "observation": "You pick up the apple 3 from the sinkbasin 1."
+      },
+      {
+        "action": "go to microwave 1",
+        "observation": "You arrive at microwave 1. The microwave 1 is closed."
+      }
+    ]
+  },
+  {
+    "sample_id": "sample_20",
+    "L": 0,
+    "task": "heat some apple and put it in garbagecan.",
+    "initial_observation": "You are in the middle of a room. Looking quickly around you, you see a cabinet 6, a cabinet 5, a cabinet 4, a cabinet 3, a cabinet 2, a cabinet 1, a coffeemachine 1, a countertop 3, a countertop 2, a countertop 1, a drawer 3, a drawer 2, a drawer 1, a fridge 1, a garbagecan 1, a microwave 1, a shelf 3, a shelf 2, a shelf 1, a sinkbasin 1, a stoveburner 4, a stoveburner 3, a stoveburner 2, a stoveburner 1, and a toaster 1.",
+    "prefix": []
+  },
+  {
+    "sample_id": "sample_20",
+    "L": 1,
+    "task": "heat some apple and put it in garbagecan.",
+    "initial_observation": "You are in the middle of a room. Looking quickly around you, you see a cabinet 6, a cabinet 5, a cabinet 4, a cabinet 3, a cabinet 2, a cabinet 1, a coffeemachine 1, a countertop 3, a countertop 2, a countertop 1, a drawer 3, a drawer 2, a drawer 1, a fridge 1, a garbagecan 1, a microwave 1, a shelf 3, a shelf 2, a shelf 1, a sinkbasin 1, a stoveburner 4, a stoveburner 3, a stoveburner 2, a stoveburner 1, and a toaster 1.",
+    "prefix": [
+      {
+        "action": "go to fridge 1",
+        "observation": "You arrive at fridge 1. The fridge 1 is closed."
+      }
+    ]
+  },
+  {
+    "sample_id": "sample_20",
+    "L": 2,
+    "task": "heat some apple and put it in garbagecan.",
+    "initial_observation": "You are in the middle of a room. Looking quickly around you, you see a cabinet 6, a cabinet 5, a cabinet 4, a cabinet 3, a cabinet 2, a cabinet 1, a coffeemachine 1, a countertop 3, a countertop 2, a countertop 1, a drawer 3, a drawer 2, a drawer 1, a fridge 1, a garbagecan 1, a microwave 1, a shelf 3, a shelf 2, a shelf 1, a sinkbasin 1, a stoveburner 4, a stoveburner 3, a stoveburner 2, a stoveburner 1, and a toaster 1.",
+    "prefix": [
+      {
+        "action": "go to fridge 1",
+        "observation": "You arrive at fridge 1. The fridge 1 is closed."
+      },
+      {
+        "action": "open fridge 1",
+        "observation": "You open the fridge 1. The fridge 1 is open. In it, you see a bowl 1, a pan 1, a plate 1, and a tomato 1."
+      }
+    ]
+  },
+  {
+    "sample_id": "sample_20",
+    "L": 3,
+    "task": "heat some apple and put it in garbagecan.",
+    "initial_observation": "You are in the middle of a room. Looking quickly around you, you see a cabinet 6, a cabinet 5, a cabinet 4, a cabinet 3, a cabinet 2, a cabinet 1, a coffeemachine 1, a countertop 3, a countertop 2, a countertop 1, a drawer 3, a drawer 2, a drawer 1, a fridge 1, a garbagecan 1, a microwave 1, a shelf 3, a shelf 2, a shelf 1, a sinkbasin 1, a stoveburner 4, a stoveburner 3, a stoveburner 2, a stoveburner 1, and a toaster 1.",
+    "prefix": [
+      {
+        "action": "go to fridge 1",
+        "observation": "You arrive at fridge 1. The fridge 1 is closed."
+      },
+      {
+        "action": "open fridge 1",
+        "observation": "You open the fridge 1. The fridge 1 is open. In it, you see a bowl 1, a pan 1, a plate 1, and a tomato 1."
+      },
+      {
+        "action": "go to countertop 1",
+        "observation": "You arrive at countertop 1. On the countertop 1, you see a apple 1, a egg 1, a mug 2, a soapbottle 2, a spoon 3, and a vase 2."
+      }
+    ]
+  },
+  {
+    "sample_id": "sample_21",
+    "L": 0,
+    "task": "put a peppershaker in drawer.",
+    "initial_observation": "You are in the middle of a room. Looking quickly around you, you see a cabinet 6, a cabinet 5, a cabinet 4, a cabinet 3, a cabinet 2, a cabinet 1, a coffeemachine 1, a countertop 3, a countertop 2, a countertop 1, a drawer 3, a drawer 2, a drawer 1, a fridge 1, a garbagecan 1, a microwave 1, a shelf 3, a shelf 2, a shelf 1, a sinkbasin 1, a stoveburner 4, a stoveburner 3, a stoveburner 2, a stoveburner 1, and a toaster 1.",
+    "prefix": []
+  },
+  {
+    "sample_id": "sample_21",
+    "L": 1,
+    "task": "put a peppershaker in drawer.",
+    "initial_observation": "You are in the middle of a room. Looking quickly around you, you see a cabinet 6, a cabinet 5, a cabinet 4, a cabinet 3, a cabinet 2, a cabinet 1, a coffeemachine 1, a countertop 3, a countertop 2, a countertop 1, a drawer 3, a drawer 2, a drawer 1, a fridge 1, a garbagecan 1, a microwave 1, a shelf 3, a shelf 2, a shelf 1, a sinkbasin 1, a stoveburner 4, a stoveburner 3, a stoveburner 2, a stoveburner 1, and a toaster 1.",
+    "prefix": [
+      {
+        "action": "go to cabinet 1",
+        "observation": "You arrive at cabinet 1. On the cabinet 1, you see nothing."
+      }
+    ]
+  },
+  {
+    "sample_id": "sample_21",
+    "L": 2,
+    "task": "put a peppershaker in drawer.",
+    "initial_observation": "You are in the middle of a room. Looking quickly around you, you see a cabinet 6, a cabinet 5, a cabinet 4, a cabinet 3, a cabinet 2, a cabinet 1, a coffeemachine 1, a countertop 3, a countertop 2, a countertop 1, a drawer 3, a drawer 2, a drawer 1, a fridge 1, a garbagecan 1, a microwave 1, a shelf 3, a shelf 2, a shelf 1, a sinkbasin 1, a stoveburner 4, a stoveburner 3, a stoveburner 2, a stoveburner 1, and a toaster 1.",
+    "prefix": [
+      {
+        "action": "go to cabinet 1",
+        "observation": "You arrive at cabinet 1. On the cabinet 1, you see nothing."
+      },
+      {
+        "action": "go to cabinet 2",
+        "observation": "You arrive at cabinet 2. The cabinet 2 is closed."
+      }
+    ]
+  },
+  {
+    "sample_id": "sample_21",
+    "L": 3,
+    "task": "put a peppershaker in drawer.",
+    "initial_observation": "You are in the middle of a room. Looking quickly around you, you see a cabinet 6, a cabinet 5, a cabinet 4, a cabinet 3, a cabinet 2, a cabinet 1, a coffeemachine 1, a countertop 3, a countertop 2, a countertop 1, a drawer 3, a drawer 2, a drawer 1, a fridge 1, a garbagecan 1, a microwave 1, a shelf 3, a shelf 2, a shelf 1, a sinkbasin 1, a stoveburner 4, a stoveburner 3, a stoveburner 2, a stoveburner 1, and a toaster 1.",
+    "prefix": [
+      {
+        "action": "go to cabinet 1",
+        "observation": "You arrive at cabinet 1. On the cabinet 1, you see nothing."
+      },
+      {
+        "action": "go to cabinet 2",
+        "observation": "You arrive at cabinet 2. The cabinet 2 is closed."
+      },
+      {
+        "action": "open cabinet 2",
+        "observation": "You open the cabinet 2. The cabinet 2 is open. In it, you see a plate 1."
+      }
+    ]
+  },
+  {
+    "sample_id": "sample_22",
+    "L": 0,
+    "task": "put a saltshaker in drawer.",
+    "initial_observation": "You are in the middle of a room. Looking quickly around you, you see a cabinet 6, a cabinet 5, a cabinet 4, a cabinet 3, a cabinet 2, a cabinet 1, a coffeemachine 1, a countertop 3, a countertop 2, a countertop 1, a drawer 3, a drawer 2, a drawer 1, a fridge 1, a garbagecan 1, a microwave 1, a shelf 3, a shelf 2, a shelf 1, a sinkbasin 1, a stoveburner 4, a stoveburner 3, a stoveburner 2, a stoveburner 1, and a toaster 1.",
+    "prefix": []
+  },
+  {
+    "sample_id": "sample_22",
+    "L": 1,
+    "task": "put a saltshaker in drawer.",
+    "initial_observation": "You are in the middle of a room. Looking quickly around you, you see a cabinet 6, a cabinet 5, a cabinet 4, a cabinet 3, a cabinet 2, a cabinet 1, a coffeemachine 1, a countertop 3, a countertop 2, a countertop 1, a drawer 3, a drawer 2, a drawer 1, a fridge 1, a garbagecan 1, a microwave 1, a shelf 3, a shelf 2, a shelf 1, a sinkbasin 1, a stoveburner 4, a stoveburner 3, a stoveburner 2, a stoveburner 1, and a toaster 1.",
+    "prefix": [
+      {
+        "action": "go to countertop 1",
+        "observation": "You arrive at countertop 1. On the countertop 1, you see a creditcard 2, a dishsponge 2, and a mug 2."
+      }
+    ]
+  },
+  {
+    "sample_id": "sample_22",
+    "L": 2,
+    "task": "put a saltshaker in drawer.",
+    "initial_observation": "You are in the middle of a room. Looking quickly around you, you see a cabinet 6, a cabinet 5, a cabinet 4, a cabinet 3, a cabinet 2, a cabinet 1, a coffeemachine 1, a countertop 3, a countertop 2, a countertop 1, a drawer 3, a drawer 2, a drawer 1, a fridge 1, a garbagecan 1, a microwave 1, a shelf 3, a shelf 2, a shelf 1, a sinkbasin 1, a stoveburner 4, a stoveburner 3, a stoveburner 2, a stoveburner 1, and a toaster 1.",
+    "prefix": [
+      {
+        "action": "go to countertop 1",
+        "observation": "You arrive at countertop 1. On the countertop 1, you see a creditcard 2, a dishsponge 2, and a mug 2."
+      },
+      {
+        "action": "go to countertop 2",
+        "observation": "You arrive at countertop 2. On the countertop 2, you see a creditcard 1, a cup 2, a knife 2, a knife 1, a lettuce 1, a papertowelroll 1, a soapbottle 2, a statue 1, a tomato 2, and a tomato 1."
+      }
+    ]
+  },
+  {
+    "sample_id": "sample_22",
+    "L": 3,
+    "task": "put a saltshaker in drawer.",
+    "initial_observation": "You are in the middle of a room. Looking quickly around you, you see a cabinet 6, a cabinet 5, a cabinet 4, a cabinet 3, a cabinet 2, a cabinet 1, a coffeemachine 1, a countertop 3, a countertop 2, a countertop 1, a drawer 3, a drawer 2, a drawer 1, a fridge 1, a garbagecan 1, a microwave 1, a shelf 3, a shelf 2, a shelf 1, a sinkbasin 1, a stoveburner 4, a stoveburner 3, a stoveburner 2, a stoveburner 1, and a toaster 1.",
+    "prefix": [
+      {
+        "action": "go to countertop 1",
+        "observation": "You arrive at countertop 1. On the countertop 1, you see a creditcard 2, a dishsponge 2, and a mug 2."
+      },
+      {
+        "action": "go to countertop 2",
+        "observation": "You arrive at countertop 2. On the countertop 2, you see a creditcard 1, a cup 2, a knife 2, a knife 1, a lettuce 1, a papertowelroll 1, a soapbottle 2, a statue 1, a tomato 2, and a tomato 1."
+      },
+      {
+        "action": "go to cabinet 1",
+        "observation": "You arrive at cabinet 1. On the cabinet 1, you see a glassbottle 1."
+      }
+    ]
+  },
+  {
+    "sample_id": "sample_23",
+    "L": 0,
+    "task": "put two keychain in safe.",
+    "initial_observation": "You are in the middle of a room. Looking quickly around you, you see a armchair 1, a cabinet 4, a cabinet 3, a cabinet 2, a cabinet 1, a drawer 5, a drawer 4, a drawer 3, a drawer 2, a drawer 1, a dresser 1, a garbagecan 1, a safe 1, a shelf 12, a shelf 11, a shelf 10, a shelf 9, a shelf 8, a shelf 7, a shelf 6, a shelf 5, a shelf 4, a shelf 3, a shelf 2, a shelf 1, a sidetable 1, and a sofa 1.",
+    "prefix": []
+  },
+  {
+    "sample_id": "sample_23",
+    "L": 1,
+    "task": "put two keychain in safe.",
+    "initial_observation": "You are in the middle of a room. Looking quickly around you, you see a armchair 1, a cabinet 4, a cabinet 3, a cabinet 2, a cabinet 1, a drawer 5, a drawer 4, a drawer 3, a drawer 2, a drawer 1, a dresser 1, a garbagecan 1, a safe 1, a shelf 12, a shelf 11, a shelf 10, a shelf 9, a shelf 8, a shelf 7, a shelf 6, a shelf 5, a shelf 4, a shelf 3, a shelf 2, a shelf 1, a sidetable 1, and a sofa 1.",
+    "prefix": [
+      {
+        "action": "go to drawer 1",
+        "observation": "You arrive at drawer 1. The drawer 1 is closed."
+      }
+    ]
+  },
+  {
+    "sample_id": "sample_23",
+    "L": 2,
+    "task": "put two keychain in safe.",
+    "initial_observation": "You are in the middle of a room. Looking quickly around you, you see a armchair 1, a cabinet 4, a cabinet 3, a cabinet 2, a cabinet 1, a drawer 5, a drawer 4, a drawer 3, a drawer 2, a drawer 1, a dresser 1, a garbagecan 1, a safe 1, a shelf 12, a shelf 11, a shelf 10, a shelf 9, a shelf 8, a shelf 7, a shelf 6, a shelf 5, a shelf 4, a shelf 3, a shelf 2, a shelf 1, a sidetable 1, and a sofa 1.",
+    "prefix": [
+      {
+        "action": "go to drawer 1",
+        "observation": "You arrive at drawer 1. The drawer 1 is closed."
+      },
+      {
+        "action": "open drawer 1",
+        "observation": "You open the drawer 1. The drawer 1 is open. In it, you see nothing."
+      }
+    ]
+  },
+  {
+    "sample_id": "sample_23",
+    "L": 3,
+    "task": "put two keychain in safe.",
+    "initial_observation": "You are in the middle of a room. Looking quickly around you, you see a armchair 1, a cabinet 4, a cabinet 3, a cabinet 2, a cabinet 1, a drawer 5, a drawer 4, a drawer 3, a drawer 2, a drawer 1, a dresser 1, a garbagecan 1, a safe 1, a shelf 12, a shelf 11, a shelf 10, a shelf 9, a shelf 8, a shelf 7, a shelf 6, a shelf 5, a shelf 4, a shelf 3, a shelf 2, a shelf 1, a sidetable 1, and a sofa 1.",
+    "prefix": [
+      {
+        "action": "go to drawer 1",
+        "observation": "You arrive at drawer 1. The drawer 1 is closed."
+      },
+      {
+        "action": "open drawer 1",
+        "observation": "You open the drawer 1. The drawer 1 is open. In it, you see nothing."
+      },
+      {
+        "action": "go to drawer 2",
+        "observation": "You arrive at drawer 2. The drawer 2 is closed."
+      }
+    ]
+  },
+  {
+    "sample_id": "sample_24",
+    "L": 0,
+    "task": "cool some pan and put it in countertop.",
+    "initial_observation": "You are in the middle of a room. Looking quickly around you, you see a cabinet 6, a cabinet 5, a cabinet 4, a cabinet 3, a cabinet 2, a cabinet 1, a coffeemachine 1, a countertop 3, a countertop 2, a countertop 1, a drawer 3, a drawer 2, a drawer 1, a fridge 1, a garbagecan 1, a microwave 1, a shelf 3, a shelf 2, a shelf 1, a sinkbasin 1, a stoveburner 4, a stoveburner 3, a stoveburner 2, a stoveburner 1, and a toaster 1.",
+    "prefix": []
+  },
+  {
+    "sample_id": "sample_24",
+    "L": 1,
+    "task": "cool some pan and put it in countertop.",
+    "initial_observation": "You are in the middle of a room. Looking quickly around you, you see a cabinet 6, a cabinet 5, a cabinet 4, a cabinet 3, a cabinet 2, a cabinet 1, a coffeemachine 1, a countertop 3, a countertop 2, a countertop 1, a drawer 3, a drawer 2, a drawer 1, a fridge 1, a garbagecan 1, a microwave 1, a shelf 3, a shelf 2, a shelf 1, a sinkbasin 1, a stoveburner 4, a stoveburner 3, a stoveburner 2, a stoveburner 1, and a toaster 1.",
+    "prefix": [
+      {
+        "action": "go to stoveburner 1",
+        "observation": "You arrive at stoveburner 1. On the stoveburner 1, you see a pot 1."
+      }
+    ]
+  },
+  {
+    "sample_id": "sample_24",
+    "L": 2,
+    "task": "cool some pan and put it in countertop.",
+    "initial_observation": "You are in the middle of a room. Looking quickly around you, you see a cabinet 6, a cabinet 5, a cabinet 4, a cabinet 3, a cabinet 2, a cabinet 1, a coffeemachine 1, a countertop 3, a countertop 2, a countertop 1, a drawer 3, a drawer 2, a drawer 1, a fridge 1, a garbagecan 1, a microwave 1, a shelf 3, a shelf 2, a shelf 1, a sinkbasin 1, a stoveburner 4, a stoveburner 3, a stoveburner 2, a stoveburner 1, and a toaster 1.",
+    "prefix": [
+      {
+        "action": "go to stoveburner 1",
+        "observation": "You arrive at stoveburner 1. On the stoveburner 1, you see a pot 1."
+      },
+      {
+        "action": "go to stoveburner 2",
+        "observation": "You arrive at stoveburner 2. On the stoveburner 2, you see a pan 1."
+      }
+    ]
+  },
+  {
+    "sample_id": "sample_24",
+    "L": 3,
+    "task": "cool some pan and put it in countertop.",
+    "initial_observation": "You are in the middle of a room. Looking quickly around you, you see a cabinet 6, a cabinet 5, a cabinet 4, a cabinet 3, a cabinet 2, a cabinet 1, a coffeemachine 1, a countertop 3, a countertop 2, a countertop 1, a drawer 3, a drawer 2, a drawer 1, a fridge 1, a garbagecan 1, a microwave 1, a shelf 3, a shelf 2, a shelf 1, a sinkbasin 1, a stoveburner 4, a stoveburner 3, a stoveburner 2, a stoveburner 1, and a toaster 1.",
+    "prefix": [
+      {
+        "action": "go to stoveburner 1",
+        "observation": "You arrive at stoveburner 1. On the stoveburner 1, you see a pot 1."
+      },
+      {
+        "action": "go to stoveburner 2",
+        "observation": "You arrive at stoveburner 2. On the stoveburner 2, you see a pan 1."
+      },
+      {
+        "action": "take pan 1 from stoveburner 2",
+        "observation": "You pick up the pan 1 from the stoveburner 2."
+      }
+    ]
+  },
+  {
+    "sample_id": "sample_25",
+    "L": 0,
+    "task": "put a hot mug in cabinet.",
+    "initial_observation": "You are in the middle of a room. Looking quickly around you, you see a cabinet 6, a cabinet 5, a cabinet 4, a cabinet 3, a cabinet 2, a cabinet 1, a coffeemachine 1, a countertop 3, a countertop 2, a countertop 1, a drawer 3, a drawer 2, a drawer 1, a fridge 1, a garbagecan 1, a microwave 1, a shelf 3, a shelf 2, a shelf 1, a sinkbasin 1, a stoveburner 4, a stoveburner 3, a stoveburner 2, a stoveburner 1, and a toaster 1.",
+    "prefix": []
+  },
+  {
+    "sample_id": "sample_25",
+    "L": 1,
+    "task": "put a hot mug in cabinet.",
+    "initial_observation": "You are in the middle of a room. Looking quickly around you, you see a cabinet 6, a cabinet 5, a cabinet 4, a cabinet 3, a cabinet 2, a cabinet 1, a coffeemachine 1, a countertop 3, a countertop 2, a countertop 1, a drawer 3, a drawer 2, a drawer 1, a fridge 1, a garbagecan 1, a microwave 1, a shelf 3, a shelf 2, a shelf 1, a sinkbasin 1, a stoveburner 4, a stoveburner 3, a stoveburner 2, a stoveburner 1, and a toaster 1.",
+    "prefix": [
+      {
+        "action": "go to countertop 1",
+        "observation": "You arrive at countertop 1. On the countertop 1, you see a mug 3."
+      }
+    ]
+  },
+  {
+    "sample_id": "sample_25",
+    "L": 2,
+    "task": "put a hot mug in cabinet.",
+    "initial_observation": "You are in the middle of a room. Looking quickly around you, you see a cabinet 6, a cabinet 5, a cabinet 4, a cabinet 3, a cabinet 2, a cabinet 1, a coffeemachine 1, a countertop 3, a countertop 2, a countertop 1, a drawer 3, a drawer 2, a drawer 1, a fridge 1, a garbagecan 1, a microwave 1, a shelf 3, a shelf 2, a shelf 1, a sinkbasin 1, a stoveburner 4, a stoveburner 3, a stoveburner 2, a stoveburner 1, and a toaster 1.",
+    "prefix": [
+      {
+        "action": "go to countertop 1",
+        "observation": "You arrive at countertop 1. On the countertop 1, you see a mug 3."
+      },
+      {
+        "action": "take mug 3 from countertop 1",
+        "observation": "You pick up the mug 3 from the countertop 1."
+      }
+    ]
+  },
+  {
+    "sample_id": "sample_25",
+    "L": 3,
+    "task": "put a hot mug in cabinet.",
+    "initial_observation": "You are in the middle of a room. Looking quickly around you, you see a cabinet 6, a cabinet 5, a cabinet 4, a cabinet 3, a cabinet 2, a cabinet 1, a coffeemachine 1, a countertop 3, a countertop 2, a countertop 1, a drawer 3, a drawer 2, a drawer 1, a fridge 1, a garbagecan 1, a microwave 1, a shelf 3, a shelf 2, a shelf 1, a sinkbasin 1, a stoveburner 4, a stoveburner 3, a stoveburner 2, a stoveburner 1, and a toaster 1.",
+    "prefix": [
+      {
+        "action": "go to countertop 1",
+        "observation": "You arrive at countertop 1. On the countertop 1, you see a mug 3."
+      },
+      {
+        "action": "take mug 3 from countertop 1",
+        "observation": "You pick up the mug 3 from the countertop 1."
+      },
+      {
+        "action": "go to microwave 1",
+        "observation": "You arrive at microwave 1. The microwave 1 is closed."
+      }
+    ]
+  },
+  {
+    "sample_id": "sample_26",
+    "L": 0,
+    "task": "examine the cd with the desklamp.",
+    "initial_observation": "You are in the middle of a room. Looking quickly around you, you see a bed 1, a desk 2, a desk 1, a drawer 6, a drawer 5, a drawer 4, a drawer 3, a drawer 2, a drawer 1, a garbagecan 1, a laundryhamper 1, a safe 1, a shelf 6, a shelf 5, a shelf 4, a shelf 3, a shelf 2, and a shelf 1.",
+    "prefix": []
+  },
+  {
+    "sample_id": "sample_26",
+    "L": 1,
+    "task": "examine the cd with the desklamp.",
+    "initial_observation": "You are in the middle of a room. Looking quickly around you, you see a bed 1, a desk 2, a desk 1, a drawer 6, a drawer 5, a drawer 4, a drawer 3, a drawer 2, a drawer 1, a garbagecan 1, a laundryhamper 1, a safe 1, a shelf 6, a shelf 5, a shelf 4, a shelf 3, a shelf 2, and a shelf 1.",
+    "prefix": [
+      {
+        "action": "go to desk 1",
+        "observation": "You arrive at desk 1. On the desk 1, you see a cd 2, a creditcard 2, and a desklamp 1."
+      }
+    ]
+  },
+  {
+    "sample_id": "sample_26",
+    "L": 2,
+    "task": "examine the cd with the desklamp.",
+    "initial_observation": "You are in the middle of a room. Looking quickly around you, you see a bed 1, a desk 2, a desk 1, a drawer 6, a drawer 5, a drawer 4, a drawer 3, a drawer 2, a drawer 1, a garbagecan 1, a laundryhamper 1, a safe 1, a shelf 6, a shelf 5, a shelf 4, a shelf 3, a shelf 2, and a shelf 1.",
+    "prefix": [
+      {
+        "action": "go to desk 1",
+        "observation": "You arrive at desk 1. On the desk 1, you see a cd 2, a creditcard 2, and a desklamp 1."
+      },
+      {
+        "action": "take cd 2 from desk 1",
+        "observation": "You pick up the cd 2 from the desk 1."
+      }
+    ]
+  },
+  {
+    "sample_id": "sample_26",
+    "L": 3,
+    "task": "examine the cd with the desklamp.",
+    "initial_observation": "You are in the middle of a room. Looking quickly around you, you see a bed 1, a desk 2, a desk 1, a drawer 6, a drawer 5, a drawer 4, a drawer 3, a drawer 2, a drawer 1, a garbagecan 1, a laundryhamper 1, a safe 1, a shelf 6, a shelf 5, a shelf 4, a shelf 3, a shelf 2, and a shelf 1.",
+    "prefix": [
+      {
+        "action": "go to desk 1",
+        "observation": "You arrive at desk 1. On the desk 1, you see a cd 2, a creditcard 2, and a desklamp 1."
+      },
+      {
+        "action": "take cd 2 from desk 1",
+        "observation": "You pick up the cd 2 from the desk 1."
+      },
+      {
+        "action": "go to desk 1",
+        "observation": "Nothing happens."
+      }
+    ]
+  },
+  {
+    "sample_id": "sample_27",
+    "L": 0,
+    "task": "find two soapbar and put them in cabinet.",
+    "initial_observation": "You are in the middle of a room. Looking quickly around you, you see a cabinet 4, a cabinet 3, a cabinet 2, a cabinet 1, a countertop 1, a garbagecan 1, a handtowelholder 2, a handtowelholder 1, a sinkbasin 2, a sinkbasin 1, a toilet 1, a toiletpaperhanger 1, and a towelholder 1.",
+    "prefix": []
+  },
+  {
+    "sample_id": "sample_27",
+    "L": 1,
+    "task": "find two soapbar and put them in cabinet.",
+    "initial_observation": "You are in the middle of a room. Looking quickly around you, you see a cabinet 4, a cabinet 3, a cabinet 2, a cabinet 1, a countertop 1, a garbagecan 1, a handtowelholder 2, a handtowelholder 1, a sinkbasin 2, a sinkbasin 1, a toilet 1, a toiletpaperhanger 1, and a towelholder 1.",
+    "prefix": [
+      {
+        "action": "go to sinkbasin 1",
+        "observation": "You arrive at sinkbasin 1. On the sinkbasin 1, you see nothing."
+      }
+    ]
+  },
+  {
+    "sample_id": "sample_27",
+    "L": 2,
+    "task": "find two soapbar and put them in cabinet.",
+    "initial_observation": "You are in the middle of a room. Looking quickly around you, you see a cabinet 4, a cabinet 3, a cabinet 2, a cabinet 1, a countertop 1, a garbagecan 1, a handtowelholder 2, a handtowelholder 1, a sinkbasin 2, a sinkbasin 1, a toilet 1, a toiletpaperhanger 1, and a towelholder 1.",
+    "prefix": [
+      {
+        "action": "go to sinkbasin 1",
+        "observation": "You arrive at sinkbasin 1. On the sinkbasin 1, you see nothing."
+      },
+      {
+        "action": "go to sinkbasin 2",
+        "observation": "You arrive at sinkbasin 2. On the sinkbasin 2, you see nothing."
+      }
+    ]
+  },
+  {
+    "sample_id": "sample_27",
+    "L": 3,
+    "task": "find two soapbar and put them in cabinet.",
+    "initial_observation": "You are in the middle of a room. Looking quickly around you, you see a cabinet 4, a cabinet 3, a cabinet 2, a cabinet 1, a countertop 1, a garbagecan 1, a handtowelholder 2, a handtowelholder 1, a sinkbasin 2, a sinkbasin 1, a toilet 1, a toiletpaperhanger 1, and a towelholder 1.",
+    "prefix": [
+      {
+        "action": "go to sinkbasin 1",
+        "observation": "You arrive at sinkbasin 1. On the sinkbasin 1, you see nothing."
+      },
+      {
+        "action": "go to sinkbasin 2",
+        "observation": "You arrive at sinkbasin 2. On the sinkbasin 2, you see nothing."
+      },
+      {
+        "action": "go to countertop 1",
+        "observation": "You arrive at countertop 1. On the countertop 1, you see a soapbar 2, a soapbar 1, a soapbottle 2, a soapbottle 1, a spraybottle 2, a spraybottle 1, and a toiletpaper 2."
+      }
+    ]
+  },
+  {
+    "sample_id": "sample_28",
+    "L": 0,
+    "task": "clean some bowl and put it in cabinet.",
+    "initial_observation": "You are in the middle of a room. Looking quickly around you, you see a cabinet 6, a cabinet 5, a cabinet 4, a cabinet 3, a cabinet 2, a cabinet 1, a coffeemachine 1, a countertop 3, a countertop 2, a countertop 1, a drawer 3, a drawer 2, a drawer 1, a fridge 1, a garbagecan 1, a microwave 1, a shelf 3, a shelf 2, a shelf 1, a sinkbasin 1, a stoveburner 4, a stoveburner 3, a stoveburner 2, a stoveburner 1, and a toaster 1.",
+    "prefix": []
+  },
+  {
+    "sample_id": "sample_28",
+    "L": 1,
+    "task": "clean some bowl and put it in cabinet.",
+    "initial_observation": "You are in the middle of a room. Looking quickly around you, you see a cabinet 6, a cabinet 5, a cabinet 4, a cabinet 3, a cabinet 2, a cabinet 1, a coffeemachine 1, a countertop 3, a countertop 2, a countertop 1, a drawer 3, a drawer 2, a drawer 1, a fridge 1, a garbagecan 1, a microwave 1, a shelf 3, a shelf 2, a shelf 1, a sinkbasin 1, a stoveburner 4, a stoveburner 3, a stoveburner 2, a stoveburner 1, and a toaster 1.",
+    "prefix": [
+      {
+        "action": "go to countertop 1",
+        "observation": "You arrive at countertop 1. On the countertop 1, you see a cellphone 2, and a cellphone 1."
+      }
+    ]
+  },
+  {
+    "sample_id": "sample_28",
+    "L": 2,
+    "task": "clean some bowl and put it in cabinet.",
+    "initial_observation": "You are in the middle of a room. Looking quickly around you, you see a cabinet 6, a cabinet 5, a cabinet 4, a cabinet 3, a cabinet 2, a cabinet 1, a coffeemachine 1, a countertop 3, a countertop 2, a countertop 1, a drawer 3, a drawer 2, a drawer 1, a fridge 1, a garbagecan 1, a microwave 1, a shelf 3, a shelf 2, a shelf 1, a sinkbasin 1, a stoveburner 4, a stoveburner 3, a stoveburner 2, a stoveburner 1, and a toaster 1.",
+    "prefix": [
+      {
+        "action": "go to countertop 1",
+        "observation": "You arrive at countertop 1. On the countertop 1, you see a cellphone 2, and a cellphone 1."
+      },
+      {
+        "action": "go to cabinet 1",
+        "observation": "You arrive at cabinet 1. On the cabinet 1, you see a mug 1, and a vase 1."
+      }
+    ]
+  },
+  {
+    "sample_id": "sample_28",
+    "L": 3,
+    "task": "clean some bowl and put it in cabinet.",
+    "initial_observation": "You are in the middle of a room. Looking quickly around you, you see a cabinet 6, a cabinet 5, a cabinet 4, a cabinet 3, a cabinet 2, a cabinet 1, a coffeemachine 1, a countertop 3, a countertop 2, a countertop 1, a drawer 3, a drawer 2, a drawer 1, a fridge 1, a garbagecan 1, a microwave 1, a shelf 3, a shelf 2, a shelf 1, a sinkbasin 1, a stoveburner 4, a stoveburner 3, a stoveburner 2, a stoveburner 1, and a toaster 1.",
+    "prefix": [
+      {
+        "action": "go to countertop 1",
+        "observation": "You arrive at countertop 1. On the countertop 1, you see a cellphone 2, and a cellphone 1."
+      },
+      {
+        "action": "go to cabinet 1",
+        "observation": "You arrive at cabinet 1. On the cabinet 1, you see a mug 1, and a vase 1."
+      },
+      {
+        "action": "go to fridge 1",
+        "observation": "You arrive at fridge 1. The fridge 1 is closed."
+      }
+    ]
+  },
+  {
+    "sample_id": "sample_29",
+    "L": 0,
+    "task": "cool some potato and put it in microwave.",
+    "initial_observation": "You are in the middle of a room. Looking quickly around you, you see a cabinet 6, a cabinet 5, a cabinet 4, a cabinet 3, a cabinet 2, a cabinet 1, a coffeemachine 1, a countertop 3, a countertop 2, a countertop 1, a drawer 3, a drawer 2, a drawer 1, a fridge 1, a garbagecan 1, a microwave 1, a shelf 3, a shelf 2, a shelf 1, a sinkbasin 1, a stoveburner 4, a stoveburner 3, a stoveburner 2, a stoveburner 1, and a toaster 1.",
+    "prefix": []
+  },
+  {
+    "sample_id": "sample_29",
+    "L": 1,
+    "task": "cool some potato and put it in microwave.",
+    "initial_observation": "You are in the middle of a room. Looking quickly around you, you see a cabinet 6, a cabinet 5, a cabinet 4, a cabinet 3, a cabinet 2, a cabinet 1, a coffeemachine 1, a countertop 3, a countertop 2, a countertop 1, a drawer 3, a drawer 2, a drawer 1, a fridge 1, a garbagecan 1, a microwave 1, a shelf 3, a shelf 2, a shelf 1, a sinkbasin 1, a stoveburner 4, a stoveburner 3, a stoveburner 2, a stoveburner 1, and a toaster 1.",
+    "prefix": [
+      {
+        "action": "go to fridge 1",
+        "observation": "You arrive at fridge 1. The fridge 1 is closed."
+      }
+    ]
+  },
+  {
+    "sample_id": "sample_29",
+    "L": 2,
+    "task": "cool some potato and put it in microwave.",
+    "initial_observation": "You are in the middle of a room. Looking quickly around you, you see a cabinet 6, a cabinet 5, a cabinet 4, a cabinet 3, a cabinet 2, a cabinet 1, a coffeemachine 1, a countertop 3, a countertop 2, a countertop 1, a drawer 3, a drawer 2, a drawer 1, a fridge 1, a garbagecan 1, a microwave 1, a shelf 3, a shelf 2, a shelf 1, a sinkbasin 1, a stoveburner 4, a stoveburner 3, a stoveburner 2, a stoveburner 1, and a toaster 1.",
+    "prefix": [
+      {
+        "action": "go to fridge 1",
+        "observation": "You arrive at fridge 1. The fridge 1 is closed."
+      },
+      {
+        "action": "open fridge 1",
+        "observation": "You open the fridge 1. The fridge 1 is open. In it, you see a egg 1, a lettuce 2, and a pan 1."
+      }
+    ]
+  },
+  {
+    "sample_id": "sample_29",
+    "L": 3,
+    "task": "cool some potato and put it in microwave.",
+    "initial_observation": "You are in the middle of a room. Looking quickly around you, you see a cabinet 6, a cabinet 5, a cabinet 4, a cabinet 3, a cabinet 2, a cabinet 1, a coffeemachine 1, a countertop 3, a countertop 2, a countertop 1, a drawer 3, a drawer 2, a drawer 1, a fridge 1, a garbagecan 1, a microwave 1, a shelf 3, a shelf 2, a shelf 1, a sinkbasin 1, a stoveburner 4, a stoveburner 3, a stoveburner 2, a stoveburner 1, and a toaster 1.",
+    "prefix": [
+      {
+        "action": "go to fridge 1",
+        "observation": "You arrive at fridge 1. The fridge 1 is closed."
+      },
+      {
+        "action": "open fridge 1",
+        "observation": "You open the fridge 1. The fridge 1 is open. In it, you see a egg 1, a lettuce 2, and a pan 1."
+      },
+      {
+        "action": "go to countertop 1",
+        "observation": "You arrive at countertop 1. On the countertop 1, you see a mug 2, a potato 1, a soapbottle 1, a spatula 1, and a spoon 1."
+      }
+    ]
+  },
+  {
+    "sample_id": "sample_30",
+    "L": 0,
+    "task": "put a hot cup in cabinet.",
+    "initial_observation": "You are in the middle of a room. Looking quickly around you, you see a cabinet 6, a cabinet 5, a cabinet 4, a cabinet 3, a cabinet 2, a cabinet 1, a coffeemachine 1, a countertop 3, a countertop 2, a countertop 1, a drawer 3, a drawer 2, a drawer 1, a fridge 1, a garbagecan 1, a microwave 1, a shelf 3, a shelf 2, a shelf 1, a sinkbasin 1, a stoveburner 4, a stoveburner 3, a stoveburner 2, a stoveburner 1, and a toaster 1.",
+    "prefix": []
+  },
+  {
+    "sample_id": "sample_30",
+    "L": 1,
+    "task": "put a hot cup in cabinet.",
+    "initial_observation": "You are in the middle of a room. Looking quickly around you, you see a cabinet 6, a cabinet 5, a cabinet 4, a cabinet 3, a cabinet 2, a cabinet 1, a coffeemachine 1, a countertop 3, a countertop 2, a countertop 1, a drawer 3, a drawer 2, a drawer 1, a fridge 1, a garbagecan 1, a microwave 1, a shelf 3, a shelf 2, a shelf 1, a sinkbasin 1, a stoveburner 4, a stoveburner 3, a stoveburner 2, a stoveburner 1, and a toaster 1.",
+    "prefix": [
+      {
+        "action": "go to fridge 1",
+        "observation": "You arrive at fridge 1. The fridge 1 is closed."
+      }
+    ]
+  },
+  {
+    "sample_id": "sample_30",
+    "L": 2,
+    "task": "put a hot cup in cabinet.",
+    "initial_observation": "You are in the middle of a room. Looking quickly around you, you see a cabinet 6, a cabinet 5, a cabinet 4, a cabinet 3, a cabinet 2, a cabinet 1, a coffeemachine 1, a countertop 3, a countertop 2, a countertop 1, a drawer 3, a drawer 2, a drawer 1, a fridge 1, a garbagecan 1, a microwave 1, a shelf 3, a shelf 2, a shelf 1, a sinkbasin 1, a stoveburner 4, a stoveburner 3, a stoveburner 2, a stoveburner 1, and a toaster 1.",
+    "prefix": [
+      {
+        "action": "go to fridge 1",
+        "observation": "You arrive at fridge 1. The fridge 1 is closed."
+      },
+      {
+        "action": "open fridge 1",
+        "observation": "You open the fridge 1. The fridge 1 is open. In it, you see a bowl 1, a bread 2, a egg 1, a pan 1, and a tomato 1."
+      }
+    ]
+  },
+  {
+    "sample_id": "sample_30",
+    "L": 3,
+    "task": "put a hot cup in cabinet.",
+    "initial_observation": "You are in the middle of a room. Looking quickly around you, you see a cabinet 6, a cabinet 5, a cabinet 4, a cabinet 3, a cabinet 2, a cabinet 1, a coffeemachine 1, a countertop 3, a countertop 2, a countertop 1, a drawer 3, a drawer 2, a drawer 1, a fridge 1, a garbagecan 1, a microwave 1, a shelf 3, a shelf 2, a shelf 1, a sinkbasin 1, a stoveburner 4, a stoveburner 3, a stoveburner 2, a stoveburner 1, and a toaster 1.",
+    "prefix": [
+      {
+        "action": "go to fridge 1",
+        "observation": "You arrive at fridge 1. The fridge 1 is closed."
+      },
+      {
+        "action": "open fridge 1",
+        "observation": "You open the fridge 1. The fridge 1 is open. In it, you see a bowl 1, a bread 2, a egg 1, a pan 1, and a tomato 1."
+      },
+      {
+        "action": "go to countertop 1",
+        "observation": "You arrive at countertop 1. On the countertop 1, you see a cellphone 2, a egg 2, and a lettuce 1."
+      }
+    ]
+  }
+]
