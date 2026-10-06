@@ -1,0 +1,36 @@
+You are given only a user query, without any reference answer or model response. Your task is to analyze the query’s difficulty profile for a large language model.
+
+Think carefully about the query before answering, but do not output your reasoning process.
+
+Important:
+- Analyze the difficulty of answering this query based only on the query itself.
+- Do not assume a specific answer.
+- Do not evaluate answer quality.
+- Focus on what capabilities and challenges the query would impose on an LLM.
+
+Consider the following candidate difficulty dimensions:
+- reasoning
+- comprehension
+- instruction_following
+- agentic
+- knowledge_retrieval
+- coding
+- multilingual
+
+Rules:
+1. Only include dimensions that are genuinely relevant to the query.
+2. Do not force all dimensions into the answer.
+3. Select at most 3 primary dimensions.
+4. Prioritize the dimensions that dominate the query's difficulty, not merely those that are present.
+5. Focus on concrete sources of difficulty, such as ambiguity, multi-step reasoning, hidden constraints, external knowledge dependence, action planning, code synthesis/debugging, or language mixing.
+6. Do not use generic statements unless they are tied to this specific query.
+7. Keep the output compact, information-dense, and suitable for downstream similarity search, retrieval, embedding, or router feature extraction.
+8. Keep difficulty_profile within 1–3 sentences.
+
+Output exactly in this format:
+
+<summary>
+overall_difficulty: [low|medium|high]
+primary_dimensions: [dimension_1, dimension_2, ...]
+difficulty_profile: [A compact description of the main challenges this query would pose to an LLM, based only on the query itself.]
+</summary>
