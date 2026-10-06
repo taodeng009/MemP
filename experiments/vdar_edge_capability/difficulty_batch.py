@@ -18,6 +18,8 @@ else:
 HERE = Path(__file__).resolve().parent
 DIMENSIONS = {'object_localization', 'navigation', 'object_manipulation', 'state_transformation',
               'action_ordering', 'multi_object_handling', 'receptacle_interaction'}
+SMOKE_FAMILIES = ('pick_and_place_simple', 'pick_cool_then_place_in_recep', 'look_at_obj_in_light',
+                  'pick_clean_then_place_in_recep', 'pick_heat_then_place_in_recep', 'pick_two_obj_and_place')
 
 
 def load_tasks(path):
@@ -60,6 +62,25 @@ def build_messages(task, prompt_version):
         user = '**Query to Analyze:**\n' + task['task_instruction']
     return [{'role': 'system', 'content': PROMPT_REGISTRY[prompt_version]},
             {'role': 'user', 'content': user}]
+
+
+def select_smoke_tasks(tasks):
+    """First CSV-order task in each family, without inspecting any outcomes."""
+    chosen = {}
+    for task in tasks:
+        family = task['task_id'].split('/')[2].split('-', 1)[0]
+        if family in SMOKE_FAMILIES and family not in chosen:
+            chosen[family] = {**task, 'task_family': family}
+    if set(chosen) != set(SMOKE_FAMILIES):
+        raise ValueError('Smoke test requires one task from each of the six families')
+    return [chosen[family] for family in SMOKE_FAMILIES]
+
+
+def print_smoke_task(task, summary):
+    print(f"\ntask_family: {task['task_family']}\ntask_id: {task['task_id']}\n"
+          f"task_instruction: {task['task_instruction']}\n"
+          f"retrieved_memories:\n{task['retrieved_memories']}\n"
+          f"difficulty_summary:\n{summary}", flush=True)
 
 
 def parse_summary(text):
@@ -110,12 +131,12 @@ def load_existing(path, tasks, config):
     return rows
 
 
-def summarize(rows):
+def summarize(rows, task_total=134):
     good = [r for r in rows if r['status'] == 'success']
     levels = Counter(r['overall_difficulty'] for r in good)
     dims = Counter(d for r in good for d in r['primary_dimensions'])
     repeats = Counter(r['difficulty_summary'] for r in good)
-    return {'task_total': 134, 'recorded_tasks': len(rows), 'remaining_tasks': 134-len(rows),
+    return {'task_total': task_total, 'recorded_tasks': len(rows), 'remaining_tasks': task_total-len(rows),
             'successful_generation_count': len(good),
             'empty_summary_count': sum(r['status'] == 'empty' for r in rows),
             'invalid_summary_count': sum(r['status'] == 'invalid' for r in rows),
@@ -137,15 +158,19 @@ def main():
     parser.add_argument('--timeout', type=float, default=120)
     parser.add_argument('--dry-run', action='store_true')
     parser.add_argument('--stats-only', action='store_true')
+    parser.add_argument('--smoke-test', action='store_true', help='alfworld_memory only: one task per family (six API calls maximum)')
     parser.add_argument('--retry-invalid', action='store_true',
                         help='Retry recorded invalid summaries once, preserving previous responses; valid records are skipped.')
     args = parser.parse_args()
+    if args.smoke_test and args.prompt_version != 'alfworld_memory':
+        parser.error('--smoke-test requires --prompt-version alfworld_memory')
     if args.prompt_version == 'alfworld_memory' and args.memory_log is None:
         parser.error('--memory-log is required for alfworld_memory')
     if args.prompt_version != 'alfworld_memory' and args.memory_log is not None:
         parser.error('--memory-log is only used with alfworld_memory')
     if args.output is None:
-        filename = 'difficulty_profiles_alfworld_memory.jsonl' if args.prompt_version == 'alfworld_memory' else 'difficulty_profiles.jsonl'
+        filename = ('difficulty_profiles_alfworld_memory_smoke.jsonl' if args.smoke_test else
+                    'difficulty_profiles_alfworld_memory.jsonl' if args.prompt_version == 'alfworld_memory' else 'difficulty_profiles.jsonl')
         args.output = HERE / 'outputs' / filename
     if args.env_file.exists():
         for line in args.env_file.read_text(encoding='utf-8-sig').splitlines():
@@ -155,6 +180,8 @@ def main():
     tasks = load_tasks(args.input)
     if args.prompt_version == 'alfworld_memory':
         tasks = attach_retrieved_memories(tasks, args.memory_log)
+    if args.smoke_test:
+        tasks = select_smoke_tasks(tasks)
     system = PROMPT_REGISTRY[args.prompt_version]
     settings = {'temperature': float(os.environ.get('MEMORY_BUILD_TEMPERATURE', '0')),
                 'seed': int(os.environ.get('MEMORY_BUILD_SEED', '42')), 'top_p': 1, 'max_tokens': 4096,
@@ -172,16 +199,30 @@ def main():
     known = {r['task_id'] for r in records}
     retry_ids = {r['task_id'] for r in records if args.retry_invalid and r['status'] == 'invalid'}
     pending = [t for t in tasks if t['task_id'] not in known or t['task_id'] in retry_ids]
+    if args.smoke_test:
+        cached = {r['task_id']: r for r in records}
+        for task in tasks:
+            if args.dry_run or args.stats_only or task['task_id'] not in {t['task_id'] for t in pending}:
+                summary = cached.get(task['task_id'], {}).get('difficulty_summary', '(Not generated; no API call in this mode.)')
+                print_smoke_task(task, summary)
     if args.dry_run or args.stats_only or not pending:
-        print(json.dumps({'pending_api_calls': len(pending), **summarize(records)}, indent=2))
+        print(json.dumps({'pending_api_calls': len(pending), **summarize(records, len(tasks))}, indent=2))
         return
     key = os.environ.get('MEMORY_BUILD_API_KEY') or os.environ.get('OPENAI_API_KEY')
     base = os.environ.get('MEMORY_BUILD_API_BASE_URL') or os.environ.get('OPENAI_API_BASE') or os.environ.get('OPENAI_BASE_URL')
     if not config['model'] or not key or not base:
         raise ValueError('Missing memory-build model/key/base URL')
     args.output.parent.mkdir(parents=True, exist_ok=True)
+    if args.smoke_test:
+        audit = {'selection': 'first dataset CSV-order task per family; no outcome-based selection',
+                 'memory_log': str(args.memory_log), 'configuration': config,
+                 'manual_review': ['task requirements', 'applicable memory support', 'remaining effective difficulty'],
+                 'tasks': [{**t, 'messages': build_messages(t, args.prompt_version)} for t in tasks]}
+        args.output.with_suffix('.inputs.json').write_text(json.dumps(audit, ensure_ascii=False, indent=2) + '\n', encoding='utf-8')
     try:
         for task in pending:
+            if args.smoke_test:
+                print_smoke_task(task, '(Awaiting generation.)')
             messages = build_messages(task, args.prompt_version)
             req = urllib.request.Request(base.rstrip('/') + '/chat/completions',
                 data=json.dumps({'model': config['model'], 'messages': messages, **settings}, ensure_ascii=False).encode(),
@@ -203,8 +244,10 @@ def main():
             else:
                 records.append(new_record)
             save_records(args.output, records)
-            print(f"Recorded {len(records)}/134: {new_record['status']}", flush=True)
+            print(f"Recorded {len(records)}/{len(tasks)}: {new_record['status']}", flush=True)
+            if args.smoke_test:
+                print('Generated difficulty_summary:\n' + (new_record['difficulty_summary'] or text), flush=True)
     finally:
-        stats = summarize(records)
+        stats = summarize(records, len(tasks))
         args.output.with_suffix('.stats.json').write_text(json.dumps(stats, indent=2) + '\n', encoding='utf-8')
         print(json.dumps(stats, indent=2))

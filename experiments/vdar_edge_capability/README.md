@@ -72,6 +72,19 @@ The script uses all actually retrieved memories (including fewer than K on a mis
 
 API request settings, summary validation and atomic saving are unchanged. Memory text is saved alongside the exact messages and checked during resume; changed support cannot silently reuse a cached summary. No embedding, retrieval or scoring code is modified by this mode.
 
+### Six-task memory smoke test
+
+```bash
+python experiments/vdar_edge_capability/generate_difficulty.py \
+  --prompt-version alfworld_memory \
+  --memory-log ProcedureMem/Alfworld/results/paired/valid_unseen_seed42_n134_b2_qwen36_27b_fp8_top3_run1/memory/results.jsonl \
+  --smoke-test
+```
+
+This selects the first dataset CSV-order task in each of the six families, in the order simple/cool/light/clean/heat/two-object. Selection never consults outcomes. At most six generation calls are made; there is no embedding, KNN or capability evaluation. It prints each task family, instruction, actual retrieved workflow bodies and generated difficulty summary. Add `--dry-run` to inspect inputs without API calls.
+
+Outputs are separate from both full-task caches: `outputs/difficulty_profiles_alfworld_memory_smoke.jsonl`, `.stats.json`, and `.inputs.json` (selected IDs, source log, exact messages and manual review checklist). Reruns resume and print cached results without regenerating them. Review each real response for the three-part structure **task requirements → applicable procedural memory support → remaining effective difficulty**. Format validation alone does not establish that this semantic requirement is met; no automatic semantic score or fabricated verdict is added.
+
 ## VDAR retrieval feasibility
 
 From the MemP root on the server:

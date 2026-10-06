@@ -110,6 +110,40 @@ class DifficultyTests(unittest.TestCase):
                     message = json.loads(request.call_args.args[0].data)['messages'][1]['content']
                     self.assertIn(tasks[1]['task_instruction'], message)
 
+    def test_memory_smoke_only_six_families_and_reuses_cache(self):
+        tasks = runner.load_tasks(ROOT / 'experiments/vdar_edge_capability/outputs/edge_capability_dataset.csv')
+        logs = [{'task_id': t['task_id'], 'query': t['task_instruction'], 'condition': 'memory',
+                 'reward': 'FORBIDDEN_OUTCOME', 'retrieved_count': 1,
+                 'retrieved_memories': [{'rank': 1, 'workflow': 'Locate, acquire and place the object.'}]}
+                for t in tasks]
+        text = '<summary>\noverall_difficulty: medium\nprimary_dimensions: [object_localization]\ndifficulty_profile: Locate the object with procedural support; its position remains unknown.\n</summary>'
+        payload = json.dumps({'choices': [{'message': {'content': text}}]}).encode()
+        env = {'MEMORY_BUILD_MODEL_NAME': 'test-model', 'MEMORY_BUILD_API_KEY': 'test-key',
+               'MEMORY_BUILD_API_BASE_URL': 'http://example.invalid/v1'}
+        with tempfile.TemporaryDirectory() as directory:
+            log_path, output = Path(directory)/'logs.jsonl', Path(directory)/'smoke.jsonl'
+            log_path.write_text('\n'.join(json.dumps(r) for r in logs), encoding='utf-8')
+            cmd = ['generate', '--prompt-version', 'alfworld_memory', '--memory-log', str(log_path),
+                   '--env-file', str(Path(directory)/'absent.env'), '--output', str(output), '--smoke-test']
+            stdout = io.StringIO()
+            with patch.dict('os.environ', env, clear=True), patch.object(sys, 'argv', cmd), contextlib.redirect_stdout(stdout):
+                with patch.object(batch.urllib.request, 'urlopen', side_effect=lambda *a, **kw: io.BytesIO(payload)) as request:
+                    runner.main()
+                    self.assertEqual(request.call_count, 6)
+                with patch.object(batch.urllib.request, 'urlopen') as request:
+                    runner.main()
+                    request.assert_not_called()
+            records = [json.loads(r) for r in output.read_text(encoding='utf-8').splitlines()]
+            self.assertEqual(tuple(r['task_family'] for r in records), batch.SMOKE_FAMILIES)
+            stats = json.loads(output.with_suffix('.stats.json').read_text())
+            self.assertEqual(stats['task_total'], 6)
+            self.assertEqual(stats['successful_generation_count'], 6)
+            self.assertEqual(stats['remaining_tasks'], 0)
+            audit = json.loads(output.with_suffix('.inputs.json').read_text(encoding='utf-8'))
+            self.assertEqual(len(audit['tasks']), 6)
+            self.assertNotIn('FORBIDDEN', json.dumps(audit))
+            self.assertIn('Generated difficulty_summary:', stdout.getvalue())
+
     def test_loads_all_tasks_without_outcome_fields(self):
         rows = runner.load_tasks(ROOT / 'experiments/vdar_edge_capability/outputs/edge_capability_dataset.csv')
         self.assertEqual(len(rows), 134)
