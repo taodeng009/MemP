@@ -26,4 +26,13 @@ python experiments/vdar_edge_capability/generate_difficulty.py --dry-run
 python experiments/vdar_edge_capability/generate_difficulty.py --stats-only
 ```
 
+Explicitly retry only recorded invalid summaries (and any not-yet-recorded tasks):
+
+```bash
+python experiments/vdar_edge_capability/generate_difficulty.py --retry-invalid --dry-run
+python experiments/vdar_edge_capability/generate_difficulty.py --retry-invalid
+```
+
+Each invalid task receives one new API call per invocation, with the same prompt and settings. Valid records remain unchanged. The replacement keeps the same task position and stores the complete previous response record in `previous_attempts`. Network failure preserves the old record; a new invalid response remains invalid and can be retried explicitly again. Empty records are not retried by this flag. With deterministic generation, the same malformed response may recur; success is not guaranteed.
+
 Dry-run/statistics modes make no API calls. Older five-task CSV files are not overwritten or silently converted into the JSONL cache. No real 134-task generation has been completed locally; use the configured server service and return the JSONL/statistics file for reporting.

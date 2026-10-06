@@ -98,6 +98,8 @@ def main():
     parser.add_argument('--timeout', type=float, default=120)
     parser.add_argument('--dry-run', action='store_true')
     parser.add_argument('--stats-only', action='store_true')
+    parser.add_argument('--retry-invalid', action='store_true',
+                        help='Retry recorded invalid summaries once, preserving previous responses; valid records are skipped.')
     args = parser.parse_args()
     if args.env_file.exists():
         for line in args.env_file.read_text(encoding='utf-8-sig').splitlines():
@@ -120,7 +122,8 @@ def main():
               'prompt_sha256': hashlib.sha256(system.encode()).hexdigest(), 'request_settings': settings}
     records = load_existing(args.output, tasks, config)
     known = {r['task_id'] for r in records}
-    pending = [t for t in tasks if t['task_id'] not in known]
+    retry_ids = {r['task_id'] for r in records if args.retry_invalid and r['status'] == 'invalid'}
+    pending = [t for t in tasks if t['task_id'] not in known or t['task_id'] in retry_ids]
     if args.dry_run or args.stats_only or not pending:
         print(json.dumps({'pending_api_calls': len(pending), **summarize(records)}, indent=2))
         return
@@ -142,10 +145,18 @@ def main():
                 text = value['choices'][0]['message']['content']
             except Exception as exc:
                 raise RuntimeError(f'Memory-build request failed ({type(exc).__name__}); completed records preserved, rerun to resume.') from None
-            records.append({**task, **parse_summary(text), 'configuration': config, 'response_text': text,
-                            'messages': messages, 'usage': value.get('usage')})
+            new_record = {**task, **parse_summary(text), 'configuration': config, 'response_text': text,
+                          'messages': messages, 'usage': value.get('usage')}
+            if task['task_id'] in retry_ids:
+                index = next(i for i, r in enumerate(records) if r['task_id'] == task['task_id'])
+                previous = dict(records[index])
+                history = list(previous.pop('previous_attempts', []))
+                new_record['previous_attempts'] = history + [previous]
+                records[index] = new_record
+            else:
+                records.append(new_record)
             save_records(args.output, records)
-            print(f"Recorded {len(records)}/134: {records[-1]['status']}", flush=True)
+            print(f"Recorded {len(records)}/134: {new_record['status']}", flush=True)
     finally:
         stats = summarize(records)
         args.output.with_suffix('.stats.json').write_text(json.dumps(stats, indent=2) + '\n', encoding='utf-8')

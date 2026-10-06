@@ -103,6 +103,43 @@ class DifficultyTests(unittest.TestCase):
                 self.assertEqual(stats['successful_generation_count'], 134)
                 self.assertEqual(stats['identical_summary_duplicate_extra_records'], 133)
 
+                records = [json.loads(line) for line in output.read_text(encoding='utf-8').splitlines()]
+                original = records[104]
+                bad = {**original, **batch.parse_summary('bad'), 'response_text': 'bad'}
+                for field in ['overall_difficulty', 'primary_dimensions', 'difficulty_profile']:
+                    bad.pop(field, None)
+                records[104] = bad
+                batch.save_records(output, records)
+                before = output.read_bytes()
+                with patch.object(batch.urllib.request, 'urlopen') as request:
+                    runner.main()
+                    request.assert_not_called()
+                self.assertEqual(output.read_bytes(), before)
+                with patch.object(sys, 'argv', command + ['--retry-invalid', '--dry-run']), patch.object(batch.urllib.request, 'urlopen') as request:
+                    runner.main()
+                    request.assert_not_called()
+                self.assertEqual(output.read_bytes(), before)
+                with patch.object(sys, 'argv', command + ['--retry-invalid']):
+                    with patch.object(batch.urllib.request, 'urlopen', side_effect=OSError('offline')):
+                        with self.assertRaises(RuntimeError):
+                            runner.main()
+                    self.assertEqual(output.read_bytes(), before)
+                    with patch.object(batch.urllib.request, 'urlopen', return_value=io.BytesIO(payload)) as request:
+                        runner.main()
+                        self.assertEqual(request.call_count, 1)
+                updated = [json.loads(line) for line in output.read_text(encoding='utf-8').splitlines()]
+                self.assertEqual(len(updated), 134)
+                self.assertEqual(updated[:104], records[:104])
+                self.assertEqual(updated[105:], records[105:])
+                self.assertEqual(updated[104]['status'], 'success')
+                self.assertEqual(updated[104]['previous_attempts'], [bad])
+                stats = json.loads(output.with_suffix('.stats.json').read_text())
+                self.assertEqual(stats['successful_generation_count'], 134)
+                self.assertEqual(stats['invalid_summary_count'], 0)
+                with patch.object(sys, 'argv', command + ['--retry-invalid']), patch.object(batch.urllib.request, 'urlopen') as request:
+                    runner.main()
+                    request.assert_not_called()
+
 
 if __name__ == '__main__':
     unittest.main()
