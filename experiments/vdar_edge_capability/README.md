@@ -85,6 +85,24 @@ This selects the first dataset CSV-order task in each of the six families, in th
 
 Outputs are separate from both full-task caches: `outputs/difficulty_profiles_alfworld_memory_smoke.jsonl`, `.stats.json`, and `.inputs.json` (selected IDs, source log, exact messages and manual review checklist). Reruns resume and print cached results without regenerating them. Review each real response for the three-part structure **task requirements → applicable procedural memory support → remaining effective difficulty**. Format validation alone does not establish that this semantic requirement is met; no automatic semantic score or fabricated verdict is added.
 
+## Twelve-task online memory support contrast
+
+```bash
+# Inspect and freeze the twelve selected inputs; no API calls.
+python experiments/vdar_edge_capability/online_support_smoke.py --prepare-only
+
+# Generate at most twelve summaries, then display actual outcomes separately.
+python experiments/vdar_edge_capability/online_support_smoke.py
+```
+
+The source is the specified online-construction run2 (`online_construction_fifo_shortest_first`). Each family has one manually reviewed good-support and one bad-support case. Fixed task indices and content-based rationales are in `CASES`. Selection projects the source to instructions, workflow bodies and execution-time memory metadata before accessing outcomes. Good means stronger applicable procedural support, not guaranteed success, complete support, or verified memory correctness. The heating good case is explicitly partial; the light bad case has zero retrieved memories. Do not interpret this purposive sample as population-level statistics.
+
+The input to the existing `alfworld_memory` prompt contains only task instruction and the original, ranked workflow bodies (or a no-memory marker). No support_group, interval, memory IDs, scores, outcome labels, actions or observations enter the LLM request. Memory state is reported as logged interval ID (zero-based), policy, available-memory count and retrieved memory IDs; no future memory store is consulted.
+
+Default output: `outputs/online_memory_support_smoke_run2/`. `inputs.json` freezes the twelve tasks, support reasons, state and exact messages. Final outcomes are held separately in `display_labels.json`; scoring never reads this file. `summaries.jsonl` checkpoints each response and resumes without regenerating recorded tasks. Only after all twelve responses exist does `display_results.json` merge outcomes for display, preserving invalid summaries and their validation status. Original prompts, retrieval, embeddings and capability scoring are untouched.
+
+Run tests with `python -m unittest discover -s tests -p test_online_support_smoke.py`. Tests use mocked model responses, never real service calls.
+
 ## VDAR retrieval feasibility
 
 From the MemP root on the server:
