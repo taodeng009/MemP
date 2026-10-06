@@ -1,21 +1,29 @@
-# Minimal task difficulty generation
+# ALFWorld instruction-only difficulty profiles
 
-Default is now `prompt_version="alfworld"`, registered in the local `difficulty_prompts.py` registry using the supplied ALFWorld execution-difficulty prompt verbatim. Official VDAR source and frozen V2 are unchanged. Same selection of five task instructions. Default output is `outputs/difficulty_5_tasks_alfworld.csv`, preserving the prior V2 output. Audit records prompt version and SHA-256.
-
-Run `python experiments/vdar_edge_capability/generate_difficulty.py --prompt-version alfworld` on the server; `--prompt-version v2` remains available for the original prompt. No embedding/retrieval or full134 run.
-
-From the repository root:
+Run on the server from the MemP root:
 
 ```bash
 python experiments/vdar_edge_capability/generate_difficulty.py
 ```
 
-Reads `outputs/edge_capability_dataset.csv`, selects the first task of each new task type in dataset order until exactly five different types are selected. Selection does not use success or p_edge. No full134 batch, embedding or retrieval.
+Default prompt_version is alfworld. Reads all 134 unique tasks from outputs/edge_capability_dataset.csv. Only task_instruction enters the model input; no outcomes, p_edge, environment, memory, embedding or retrieval. The supplied ALFWorld system prompt and frozen official V2 remain unchanged.
 
-The `v2` option uses the exact official VDAR `V2_SYSTEM_PROMPT` frozen in `prompts/vdar_v2_system.txt` (hash checked). Both versions use the original user template `**Query to Analyze:**\n{task_instruction}`. Official source remains unchanged. Dynamic model input is ONLY task_instruction; task_id/type and success metadata are not sent.
+Uses .env MEMORY_BUILD_MODEL_NAME and memory-build endpoint/key and generation settings. Output: outputs/difficulty_profiles.jsonl, one record per task_id, with summary, parsed fields, validation status, raw response, exact messages, configuration and usage.
 
-Reads MemP `.env` with environment variables taking precedence. Requires MEMORY_BUILD_MODEL_NAME; resolves MEMORY_BUILD_API_KEY/base URL with MemP's OpenAI fallbacks, and uses existing memory build temperature/seed/top_k/enable_thinking settings. Standard-library HTTP client sends the equivalent OpenAI-compatible request; no embedding dependencies needed.
+Resume by rerunning the same command. Each response is atomically checkpointed before the next request. All recorded task IDs are skipped, including empty/invalid summaries: no automatic re-evaluation of existing tasks. A failed network request is not recorded, so it is retried on the next invocation. Configuration, instructions, duplicate IDs and cached validation results are checked before resuming. Changing model/prompt/settings requires a separate --output. Do not run concurrent writers on the same output.
 
-Outputs `outputs/difficulty_5_tasks.csv` with exactly task_instruction and difficulty_summary columns, plus `.audit.json` with task selection, exact messages, raw responses and usage. The summary is the content inside `<summary>...</summary>`; missing summary fails rather than fabricating content. Outputs checkpoint after each successful request; existing CSV is not overwritten, so an interrupted partial batch must use another --output or be dealt with explicitly.
+Completion prints and writes outputs/difficulty_profiles.stats.json:
+- Successful valid summary count.
+- Empty summary count and nonempty/malformed invalid count.
+- low/medium/high distribution.
+- Count of each of seven primary_dimensions.
+- Exact duplicate summary extra-record count, duplicate groups and participating records.
 
-`--dry-run` validates prompt and prints the selected five tasks without API calls. Real generation needs network access to the configured memory-build server. Local request on 2026-10-06 failed with URLError; no actual summaries have been generated.
+A valid response has exactly one summary block with no outside text, low/medium/high, 1–3 distinct allowed dimensions, and a nonempty profile. Prompt requests 1–3 profile sentences; no NLP sentence-length classifier is added. Invalid responses are preserved, never repaired or fabricated. Level/dimension/duplicate statistics use valid summaries only. Duplicate count means sum(group size - 1), not number of groups.
+
+```bash
+python experiments/vdar_edge_capability/generate_difficulty.py --dry-run
+python experiments/vdar_edge_capability/generate_difficulty.py --stats-only
+```
+
+Dry-run/statistics modes make no API calls. Older five-task CSV files are not overwritten or silently converted into the JSONL cache. No real 134-task generation has been completed locally; use the configured server service and return the JSONL/statistics file for reporting.
