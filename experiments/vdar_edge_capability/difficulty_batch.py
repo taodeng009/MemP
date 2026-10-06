@@ -1,4 +1,4 @@
-"""Instruction-only 134-task JSONL generation and validated resume."""
+"""134-task difficulty generation with optional logged procedural memory input."""
 import argparse
 from collections import Counter
 import csv
@@ -26,6 +26,40 @@ def load_tasks(path):
     if len(rows) != 134 or len({r['task_id'] for r in rows}) != 134 or any(not r['task_instruction'].strip() for r in rows):
         raise ValueError('Expected 134 unique tasks with nonempty instructions')
     return [{'task_id': r['task_id'], 'task_instruction': r['task_instruction']} for r in rows]
+
+
+def attach_retrieved_memories(tasks, path):
+    """Use logged workflow bodies only: no new retrieval or outcome metadata."""
+    rows = [json.loads(line) for line in path.read_text(encoding='utf-8').splitlines() if line.strip()]
+    by_id = {r['task_id']: r for r in rows}
+    if len(by_id) != len(rows) or set(by_id) != {t['task_id'] for t in tasks}:
+        raise ValueError('Memory log must contain exactly the dataset task IDs with no duplicates')
+    result = []
+    for task in tasks:
+        row = by_id[task['task_id']]
+        if row.get('query') != task['task_instruction'] or row.get('condition') != 'memory':
+            raise ValueError('Memory log instruction/condition mismatch')
+        memories = row.get('retrieved_memories')
+        count = row.get('retrieved_count')
+        if not isinstance(memories, list) or type(count) is not int or count != len(memories):
+            raise ValueError('Missing/inconsistent retrieved memory list/count')
+        for rank, memory in enumerate(memories, 1):
+            if (not isinstance(memory, dict) or type(memory.get('rank')) is not int or memory['rank'] != rank
+                    or not isinstance(memory.get('workflow'), str) or not memory['workflow'].strip()):
+                raise ValueError('Expected nonempty workflow bodies in logged rank order')
+        text = '\n\n'.join(f"Memory {rank}:\n{memory['workflow']}" for rank, memory in enumerate(memories, 1))
+        result.append({**task, 'retrieved_memories': text or '(No procedural memories were retrieved.)'})
+    return result
+
+
+def build_messages(task, prompt_version):
+    if prompt_version == 'alfworld_memory':
+        user = ('**Task Instruction:**\n' + task['task_instruction']
+                + '\n\n**Retrieved Procedural Memories:**\n' + task['retrieved_memories'])
+    else:
+        user = '**Query to Analyze:**\n' + task['task_instruction']
+    return [{'role': 'system', 'content': PROMPT_REGISTRY[prompt_version]},
+            {'role': 'user', 'content': user}]
 
 
 def parse_summary(text):
@@ -60,13 +94,17 @@ def save_records(path, rows):
 def load_existing(path, tasks, config):
     if not path.exists():
         return []
-    expected = {t['task_id']: t['task_instruction'] for t in tasks}
+    expected = {t['task_id']: t for t in tasks}
     rows = [json.loads(l) for l in path.read_text(encoding='utf-8').splitlines() if l.strip()]
     if len({r['task_id'] for r in rows}) != len(rows):
         raise ValueError('Duplicate cached task IDs')
     for r in rows:
-        if r['task_id'] not in expected or r['task_instruction'] != expected[r['task_id']] or r['configuration'] != config:
+        if (r['task_id'] not in expected
+                or any(r.get(k) != v for k, v in expected[r['task_id']].items())
+                or r['configuration'] != config):
             raise ValueError('Cache task/model/prompt/settings mismatch')
+        if config.get('prompt_version') == 'alfworld_memory' and r.get('messages') != build_messages(expected[r['task_id']], 'alfworld_memory'):
+            raise ValueError('Cached task/memory messages mismatch')
         if any(r.get(k) != v for k, v in parse_summary(r['response_text']).items()):
             raise ValueError('Cached validation/summary mismatch')
     return rows
@@ -93,21 +131,31 @@ def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument('--input', type=Path, default=HERE / 'outputs/edge_capability_dataset.csv')
     parser.add_argument('--env-file', type=Path, default=HERE.parents[1] / '.env')
-    parser.add_argument('--output', type=Path, default=HERE / 'outputs/difficulty_profiles.jsonl')
-    parser.add_argument('--prompt-version', choices=['alfworld'], default='alfworld')
+    parser.add_argument('--output', type=Path)
+    parser.add_argument('--prompt-version', choices=['alfworld', 'alfworld_memory'], default='alfworld')
+    parser.add_argument('--memory-log', type=Path, help='Actual memory-condition results.jsonl; required for alfworld_memory')
     parser.add_argument('--timeout', type=float, default=120)
     parser.add_argument('--dry-run', action='store_true')
     parser.add_argument('--stats-only', action='store_true')
     parser.add_argument('--retry-invalid', action='store_true',
                         help='Retry recorded invalid summaries once, preserving previous responses; valid records are skipped.')
     args = parser.parse_args()
+    if args.prompt_version == 'alfworld_memory' and args.memory_log is None:
+        parser.error('--memory-log is required for alfworld_memory')
+    if args.prompt_version != 'alfworld_memory' and args.memory_log is not None:
+        parser.error('--memory-log is only used with alfworld_memory')
+    if args.output is None:
+        filename = 'difficulty_profiles_alfworld_memory.jsonl' if args.prompt_version == 'alfworld_memory' else 'difficulty_profiles.jsonl'
+        args.output = HERE / 'outputs' / filename
     if args.env_file.exists():
         for line in args.env_file.read_text(encoding='utf-8-sig').splitlines():
             if line.strip() and not line.lstrip().startswith('#') and '=' in line:
                 k, v = line.split('=', 1)
                 os.environ.setdefault(k.strip(), v.strip().strip('\"\''))
     tasks = load_tasks(args.input)
-    system = PROMPT_REGISTRY['alfworld']
+    if args.prompt_version == 'alfworld_memory':
+        tasks = attach_retrieved_memories(tasks, args.memory_log)
+    system = PROMPT_REGISTRY[args.prompt_version]
     settings = {'temperature': float(os.environ.get('MEMORY_BUILD_TEMPERATURE', '0')),
                 'seed': int(os.environ.get('MEMORY_BUILD_SEED', '42')), 'top_p': 1, 'max_tokens': 4096,
                 'top_k': int(os.environ.get('MEMORY_BUILD_TOP_K', '1'))}
@@ -118,7 +166,7 @@ def main():
         settings['enable_thinking'] = thinking.lower().strip() in ['true', '1', 'yes', 'on']
     if args.timeout <= 0 or not math.isfinite(settings['temperature']) or settings['temperature'] < 0 or settings['top_k'] < 1:
         raise ValueError('Invalid request settings')
-    config = {'model': os.environ.get('MEMORY_BUILD_MODEL_NAME'), 'prompt_version': 'alfworld',
+    config = {'model': os.environ.get('MEMORY_BUILD_MODEL_NAME'), 'prompt_version': args.prompt_version,
               'prompt_sha256': hashlib.sha256(system.encode()).hexdigest(), 'request_settings': settings}
     records = load_existing(args.output, tasks, config)
     known = {r['task_id'] for r in records}
@@ -134,8 +182,7 @@ def main():
     args.output.parent.mkdir(parents=True, exist_ok=True)
     try:
         for task in pending:
-            messages = [{'role': 'system', 'content': system},
-                        {'role': 'user', 'content': '**Query to Analyze:**\n' + task['task_instruction']}]
+            messages = build_messages(task, args.prompt_version)
             req = urllib.request.Request(base.rstrip('/') + '/chat/completions',
                 data=json.dumps({'model': config['model'], 'messages': messages, **settings}, ensure_ascii=False).encode(),
                 headers={'Content-Type': 'application/json', 'Authorization': 'Bearer ' + key})

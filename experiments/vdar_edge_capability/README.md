@@ -37,6 +37,41 @@ Each invalid task receives one new API call per invocation, with the same prompt
 
 Dry-run/statistics modes make no API calls. Older five-task CSV files are not overwritten or silently converted into the JSONL cache. No real 134-task generation has been completed locally; use the configured server service and return the JSONL/statistics file for reporting.
 
+## Memory-conditioned difficulty generation (optional)
+
+`alfworld_memory` uses the supplied memory-conditioned system prompt without changing the existing `v2` or `alfworld` prompts. It still uses MemP's independent HTTP API call, not the official VDAR Agent. Select an explicit memory-condition `results.jsonl` so the source run is unambiguous:
+
+```bash
+# Validation only; no API calls and no output files written.
+python experiments/vdar_edge_capability/generate_difficulty.py \
+  --prompt-version alfworld_memory \
+  --memory-log ProcedureMem/Alfworld/results/paired/valid_unseen_seed42_n134_b2_qwen36_27b_fp8_top3_run1/memory/results.jsonl \
+  --dry-run
+```
+
+When generation is authorized, remove `--dry-run`. Default output for this mode is `outputs/difficulty_profiles_alfworld_memory.jsonl` and its `.stats.json`, separate from instruction-only outputs. `--output` remains available. Rerunning resumes without repeating recorded tasks; `--retry-invalid` retains its existing behavior.
+
+Inputs are aligned by task ID and exact instruction. Only the logged `retrieved_memories[*].workflow` bodies, in recorded rank order, enter the user message:
+
+```text
+**Task Instruction:**
+{task_instruction}
+
+**Retrieved Procedural Memories:**
+Memory 1:
+{first workflow body}
+
+Memory 2:
+{second workflow body}
+
+Memory 3:
+{third workflow body}
+```
+
+The script uses all actually retrieved memories (including fewer than K on a miss/filtered result); it does not re-retrieve, re-rank, truncate or fabricate bodies. Zero-memory tasks use `(No procedural memories were retrieved.)`. Missing tasks, duplicates, query mismatch, non-memory condition, count/rank inconsistencies or empty workflow bodies stop the run. No reward, final outcome, trajectory, RU, BD, distance, similarity or other memory metadata is added. The source memory bodies are passed verbatim, not rewritten or supplemented with historical labels.
+
+API request settings, summary validation and atomic saving are unchanged. Memory text is saved alongside the exact messages and checked during resume; changed support cannot silently reuse a cached summary. No embedding, retrieval or scoring code is modified by this mode.
+
 ## VDAR retrieval feasibility
 
 From the MemP root on the server:
