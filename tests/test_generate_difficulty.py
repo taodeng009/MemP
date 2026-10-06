@@ -5,14 +5,26 @@ from pathlib import Path
 import tempfile
 import textwrap
 import unittest
+import sys
+from unittest.mock import patch
 
 ROOT = Path(__file__).resolve().parents[1]
 spec = importlib.util.spec_from_file_location('generate_difficulty', ROOT / 'experiments/vdar_edge_capability/generate_difficulty.py')
 runner = importlib.util.module_from_spec(spec)
-spec.loader.exec_module(runner)
+prompt_spec = importlib.util.spec_from_file_location('difficulty_prompts', ROOT / 'experiments/vdar_edge_capability/difficulty_prompts.py')
+prompts = importlib.util.module_from_spec(prompt_spec)
+prompt_spec.loader.exec_module(prompts)
+with patch.dict(sys.modules, {'difficulty_prompts': prompts}):
+    spec.loader.exec_module(runner)
 
 
 class DifficultyTests(unittest.TestCase):
+    def test_alfworld_registered_and_v2_preserved(self):
+        self.assertEqual(prompts.PROMPT_REGISTRY['alfworld'], prompts.ALFWORLD_SYSTEM_PROMPT)
+        self.assertEqual(prompts.PROMPT_REGISTRY['v2'], prompts.V2_SYSTEM_PROMPT)
+        self.assertIn('object_localization', prompts.ALFWORLD_SYSTEM_PROMPT)
+        self.assertIn('Do not assume a particular environment layout', prompts.ALFWORLD_SYSTEM_PROMPT)
+
     def test_selects_five_types_and_does_not_carry_outcomes(self):
         rows = runner.select_tasks(ROOT / 'experiments/vdar_edge_capability/outputs/edge_capability_dataset.csv')
         self.assertEqual(len(rows), 5)

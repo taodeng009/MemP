@@ -1,4 +1,4 @@
-"""Five task types only; unchanged official VDAR V2 prompt and query-only input."""
+"""Five task types only; versioned difficulty prompt and instruction-only input."""
 import argparse
 import csv
 import hashlib
@@ -7,6 +7,11 @@ import os
 from pathlib import Path
 import re
 import urllib.request
+
+if __package__:
+    from .difficulty_prompts import PROMPT_REGISTRY
+else:
+    from difficulty_prompts import PROMPT_REGISTRY
 
 HERE = Path(__file__).resolve().parent
 ROOT = HERE.parents[1]
@@ -34,6 +39,7 @@ def main():
     parser.add_argument('--output', type=Path, default=HERE / 'outputs/difficulty_5_tasks.csv')
     parser.add_argument('--dry-run', action='store_true')
     parser.add_argument('--timeout', type=float, default=120)
+    parser.add_argument('--prompt-version', choices=sorted(PROMPT_REGISTRY), default='alfworld')
     args = parser.parse_args()
     if args.env_file.exists():
         for line in args.env_file.read_text(encoding='utf-8-sig').splitlines():
@@ -41,10 +47,10 @@ def main():
                 key, value = line.split('=', 1)
                 os.environ.setdefault(key.strip(), value.strip().strip('\"\''))
     tasks = select_tasks(args.input)
-    system = (HERE / 'prompts/vdar_v2_system.txt').read_text(encoding='utf-8').strip()
+    system = PROMPT_REGISTRY[args.prompt_version]
     prompt_hash = hashlib.sha256(system.encode()).hexdigest()
     provenance = json.loads((HERE / 'prompts/vdar_v2_provenance.json').read_text(encoding='utf-8'))
-    if prompt_hash != provenance['v2_prompt_sha256']:
+    if hashlib.sha256(PROMPT_REGISTRY['v2'].encode()).hexdigest() != provenance['v2_prompt_sha256']:
         raise ValueError('Official V2 prompt changed')
     messages = [[{'role': 'system', 'content': system},
                  {'role': 'user', 'content': '**Query to Analyze:**\n' + t['task_instruction']}]
@@ -52,13 +58,16 @@ def main():
     if args.dry_run:
         print(json.dumps({'tasks': tasks, 'prompt_sha256': prompt_hash,
                           'model': os.environ.get('MEMORY_BUILD_MODEL_NAME'),
-                          'model_input': 'task_instruction only; exact official system/user templates'}, indent=2))
+                          'prompt_version': args.prompt_version,
+                          'model_input': 'task_instruction only; versioned system prompt and official user template'}, indent=2))
         return
     model = os.environ.get('MEMORY_BUILD_MODEL_NAME')
     key = os.environ.get('MEMORY_BUILD_API_KEY') or os.environ.get('OPENAI_API_KEY')
     base = os.environ.get('MEMORY_BUILD_API_BASE_URL') or os.environ.get('OPENAI_API_BASE') or os.environ.get('OPENAI_BASE_URL')
     if not model or not key or not base:
         raise ValueError('Missing memory-build model/key/base URL configuration')
+    if args.prompt_version == 'alfworld' and args.output == HERE / 'outputs/difficulty_5_tasks.csv':
+        args.output = HERE / 'outputs/difficulty_5_tasks_alfworld.csv'
     if args.output.exists():
         raise ValueError('Output exists; use another --output to avoid overwriting')
     extra = {'top_k': int(os.environ.get('MEMORY_BUILD_TOP_K', '1'))}
@@ -92,7 +101,7 @@ def main():
             writer = csv.DictWriter(handle, fieldnames=['task_instruction', 'difficulty_summary'])
             writer.writeheader()
             writer.writerows(results)
-        args.output.with_suffix('.audit.json').write_text(json.dumps({'v2_prompt_sha256': prompt_hash, 'records': audit}, indent=2) + '\n', encoding='utf-8')
+        args.output.with_suffix('.audit.json').write_text(json.dumps({'prompt_version': args.prompt_version, 'prompt_sha256': prompt_hash, 'records': audit}, indent=2) + '\n', encoding='utf-8')
         print(json.dumps(results[-1], ensure_ascii=False), flush=True)
 
 
